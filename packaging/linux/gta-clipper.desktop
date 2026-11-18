@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=GTA Clipper
+Comment=Turn livestream hype moments into shorts
+Exec=gta-clipper
+Icon=gta-clipper
+Terminal=false
+Categories=AudioVideo;Video;

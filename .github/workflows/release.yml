@@ -1,0 +1,114 @@
+# Builds the Windows installer + .deb + .rpm when you push a version tag (git tag v1.2.3 && git push --tags),
+# publishes them as a GitHub Release, and updates the signed apt/dnf repositories on GitHub Pages.
+name: release
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Prepare build
+        run: scripts/prepare-build.sh "$VERSION" linux
+      - name: Install nfpm
+        run: |
+          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | sudo tee /etc/apt/sources.list.d/goreleaser.list
+          sudo apt-get update && sudo apt-get install -y nfpm
+      - name: Build .deb and .rpm
+        env:
+          MAINTAINER: "${{ github.repository_owner }} <noreply@users.noreply.github.com>"
+          HOMEPAGE: "https://github.com/${{ github.repository }}"
+          NFPM_RPM_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          printf '%s\n' "$GPG_PRIVATE_KEY" > "$RUNNER_TEMP/signing.asc"
+          export RPM_SIGNING_KEY_FILE="$RUNNER_TEMP/signing.asc"
+          mkdir -p dist
+          nfpm pkg --packager deb --config packaging/nfpm.yaml --target dist/
+          nfpm pkg --packager rpm --config packaging/nfpm.yaml --target dist/
+          rm -f "$RUNNER_TEMP/signing.asc"
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with: {name: linux-packages, path: "dist/*"}
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare build
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          scripts/prepare-build.sh "$VERSION" windows
+      - name: Build installer
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$env:VERSION" packaging\windows\gta-clipper.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Optional code signing (removes the SmartScreen warning) - see docs/CI-CD guide, section "Signing".
+      - uses: actions/upload-artifact@v4
+        with: {name: windows-installer, path: "dist/*.exe"}
+
+  release:
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {path: dist, merge-multiple: true}
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}   # v1.2.3-rc1 = test build, not offered to users
+
+  repos:
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/download-artifact@v4
+        with: {path: dist, merge-multiple: true}
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y apt-utils createrepo-c gnupg
+      - name: Import signing key
+        env: {GPG_PRIVATE_KEY: "${{ secrets.GPG_PRIVATE_KEY }}"}
+        run: printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+      - name: Update apt + dnf repositories on gh-pages
+        env:
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          export PAGES_URL="https://${OWNER,,}.github.io/${REPO}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages:gh-pages || true
+          if git show-ref --verify --quiet refs/heads/gh-pages; then git worktree add site gh-pages; else git worktree add --orphan -b gh-pages site; fi
+          scripts/publish-repos.sh dist site
+          cd site
+          git add -A
+          git commit -m "packages for ${GITHUB_REF_NAME}"
+          git push origin gh-pages

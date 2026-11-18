@@ -1,0 +1,12 @@
+[Unit]
+Description=GTA Clipper (livestream clipper)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/gta-clipper --no-browser
+Environment=GTA_CLIPPER_SUPERVISED=1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

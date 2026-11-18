@@ -1,0 +1,9 @@
+pyyaml>=6
+numpy>=1.26
+fastapi>=0.110
+uvicorn>=0.29
+faster-whisper>=1.1
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*
+streamlink>=7
+websockets>=12   # only for the experimental Kick chat reader

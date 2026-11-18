@@ -1,0 +1,25 @@
+name: ci
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["**"]
+  pull_request:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
+          pip install pyyaml numpy pytest
+      - name: Byte-compile
+        run: python -m compileall -q common watcher clipper web tools
+      - name: Check UI script syntax
+        run: node --check web/static/app.js
+      - name: Unit tests
+        run: pytest -q tests

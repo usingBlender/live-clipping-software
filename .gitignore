@@ -1,0 +1,11 @@
+config.yaml
+.venv/
+__pycache__/
+build/
+dist/
+logs/
+fonts/*.ttf
+fonts/*.otf
+*.png
+!web/static/*.png
+!packaging/*.png
