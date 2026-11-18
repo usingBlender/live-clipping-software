@@ -74,8 +74,12 @@ def transcribe(cfg, path: str) -> dict:
         return {"segments": [], "words": [], "warning": "faster-whisper not installed"}
     with _lock:
         model = _load(cfg)
+        # Decode with FFmpeg ourselves and pass raw 16 kHz samples. faster-whisper's own decoder uses PyAV,
+        # whose newer versions break it ("open() got an unexpected keyword argument 'metadata_errors'").
+        from watcher.media import _decode_audio
+        audio = _decode_audio(Path(path)).copy()  # writable array
         segments, _info = model.transcribe(
-            path, language=cfg["clipper"].get("language", "pt"), word_timestamps=True,
+            audio, language=cfg["clipper"].get("language", "pt"), word_timestamps=True,
             vad_filter=True, beam_size=5, condition_on_previous_text=False)
         segs, words = [], []
         for s in segments:
