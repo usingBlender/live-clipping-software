@@ -1,0 +1,42 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Architectures: amd64
+Codename: stable
+Components: main
+Date: Wed, 18 Nov 2026 17:22:21 +0000
+Label: gta-clipper
+Origin: gta-clipper
+Suite: stable
+MD5Sum:
+ f543c259db469553363e7ae8982c13f4              146 Release
+ 860efe7af56fa5f22a98a94247f4287a              824 main/binary-amd64/Packages
+ f990f60336f59abd0fd6df7ef4314222              577 main/binary-amd64/Packages.gz
+SHA1:
+ f3b092203027ef14bb72b660d658eafd700091a8              146 Release
+ ca5f79d9d4e99a1e6311efb54c4802b50a87e7fc              824 main/binary-amd64/Packages
+ 41ea8bd4809bd9a0b36c40bd6754aaea1bca59b2              577 main/binary-amd64/Packages.gz
+SHA256:
+ a36b4613559a5f788365d2c98677cc839652a7357d2fddce32ed7e3a4e359d28              146 Release
+ 4fe629de5a84d7e6e924cb9691ba8d0a0afb211bb7d822c6a640d7e7a6243d80              824 main/binary-amd64/Packages
+ c02eae47c128405b4549884bb3cf0b031290c80c23f4b3fd4d211969aa106706              577 main/binary-amd64/Packages.gz
+SHA512:
+ d4765201defb9c72f33f0138851eb6e9ddfd1d6b15ee3bf7adcba2617dda575639e1280aaeccb72669a728fea98e4f0d7b9b98e5f7d980cf4f7dba38916a515e              146 Release
+ 8d1901ace545e6097065f894d18f642282a73add25ade40692136e39254701152e8b3544aade49d655ce19b7cdd6e4ed66a05eecbdca3949340a16bca6fa774a              824 main/binary-amd64/Packages
+ 9d75a6cc9ea925fbf3f4ebe627ef68d2d8d135e14fca67687a6ff3455e81044d7d738ec5615d056ab614f5be9d7909407114805ff28fa7f668f9a86942f34194              577 main/binary-amd64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQIzBAEBCgAdFiEEXeoO/KwfmRjy7199C3uf5TaCZCwFAmr93s4ACgkQC3uf5TaC
+ZCxLLA//b465SvODwNBKHBlzjw4kETEK61XFHciTeS3Uxd9mkyHtRGuxYeCtniAN
+FCozGrsye7DAYcnPdbQ2QiRwCPt10uvxXQDeHfrINd20vShNMFpfnCCTHEP0fuQm
+df5vJwCUD1yxn1DnSQCxRyLIemGwpjv+ONGx1EyANgXmbQeNMcdOJgMhAOMA3+AC
+gdlIO9e9AQEFbB4tZhOyu8GLECTwWNg4/irAUE/5bU/Uq+w5ToukRA9dSg/48v8n
+TXMCUCu6AWE47u2OlaRukokBhILVrX/cicgxPKJKzkjg/xa6CPpP6b0uJNLJQarF
+apxp655Ly3uc9sHH7SN67Chiwjo+Bd/tY4Qrrce3sxw1RSLzeNpJS+KEjHUpigZF
+wQFsPVeypS6J4IEy2Do7ru2hjf7lCh9FX+iyHs9rTkiSmqHEG9nxxYHtYI/L/J/g
+53LzAmUWEA+AnQW3K8E/otavT63D/FTjZWn8jvgqLlxBKT0Aw1uTQPwhtZvBtqub
+lOYPpN2B9to+NFMYjX18Hs+gFX6ThPrT6kblhkeS1Ksqe9/hk1gE5F1li9oLoN2Z
+s1+5wvNiLwrhhhEVneXu3WwCSveCmY/avRty163J2hBraqbBi5jY7624uIqbg/hq
+LU0zq3q1QVnd71ykSJzW4u/mOibg18fqoIqQxxY3dMOTzH1nAKM=
+=7m4J
+-----END PGP SIGNATURE-----
