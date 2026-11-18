@@ -123,7 +123,7 @@ def route(method, pattern, auth=True):
 
 class Handler(BaseHTTPRequestHandler):
     app: App = None
-    server_version = "gta-clipper"
+    server_version = "live-clipper"
 
     def log_message(self, fmt, *args):  # quiet access log
         pass
@@ -614,7 +614,24 @@ def r_restart(h):
 
 
 # ------------------------------------------------------------------ main
+def _lock_data_dir(data_dir: Path):
+    """Only one running copy may use a data folder (two would process the same clips)."""
+    f = open(data_dir / "app.lock", "a+")
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        raise SystemExit(f"Another copy of Live Clipper is already using {data_dir}")
+    return f  # keep the handle open for the life of the process
+
+
 def serve(store: ConfigStore, open_browser=True):
+    _lock = _lock_data_dir(store.cfg["data_dir"])  # noqa: F841
     app = App(store)
     Handler.app = app
     host, port = store.cfg["server"]["host"], int(store.cfg["server"]["port"])
@@ -626,10 +643,10 @@ def serve(store: ConfigStore, open_browser=True):
         except OSError:
             time.sleep(1)
     if httpd is None:
-        raise SystemExit(f"port {port} is busy - is GTA Clipper already running?")
+        raise SystemExit(f"port {port} is busy - is Live Clipper already running?")
     httpd.daemon_threads = True
     url = f"http://127.0.0.1:{port}"
-    log(f"GTA Clipper {__version__} on {url}  (config: {store.path})")
+    log(f"Live Clipper {__version__} on {url}  (config: {store.path})")
     app.manager.start_all()
     app.worker.requeue_unfinished()
     if open_browser and not store.cfg["onboarded"]:

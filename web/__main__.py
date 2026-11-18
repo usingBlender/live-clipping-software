@@ -1,4 +1,4 @@
-"""Start GTA Clipper.
+"""Start Live Clipper.
 
   python -m web                 run the app (opens the browser on first run)
   python -m web --supervise     keep it running: restart after crashes or self-updates
@@ -33,7 +33,7 @@ def already_running(port: int) -> bool:
 
 def supervise(args: list[str]):
     """Parent loop: restarts the app if it crashes (after 5 s) or asks for a restart (exit code 3)."""
-    os.environ["GTA_CLIPPER_SUPERVISED"] = "1"
+    os.environ["LIVE_CLIPPER_SUPERVISED"] = "1"
     while True:
         rc = subprocess.call([sys.executable, "-m", "web", *args], cwd=str(Path(__file__).resolve().parent.parent))
         if rc == 0:
@@ -42,14 +42,14 @@ def supervise(args: list[str]):
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="gta-clipper")
+    ap = argparse.ArgumentParser(prog="live-clipper")
     ap.add_argument("--config")
     ap.add_argument("--port", type=int)
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--supervise", action="store_true")
     a = ap.parse_args()
     if a.config:
-        os.environ["GTA_CLIPPER_CONFIG"] = a.config
+        os.environ["LIVE_CLIPPER_CONFIG"] = a.config
     if a.supervise:
         rest = [x for x in sys.argv[1:] if x != "--supervise"]
         return supervise(rest)
@@ -61,7 +61,7 @@ def main():
     if already_running(port):
         if not a.no_browser:
             webbrowser.open(f"http://127.0.0.1:{port}")
-        print(f"GTA Clipper is already running on http://127.0.0.1:{port}")
+        print(f"Live Clipper is already running on http://127.0.0.1:{port}")
         return
     from web.server import serve
     serve(store, open_browser=not a.no_browser)

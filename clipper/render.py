@@ -19,6 +19,14 @@ def probe(path) -> tuple[int, int]:
     return int(s["width"]), int(s["height"])
 
 
+def _ffmpeg(cmd, what, cwd=None):
+    """Run ffmpeg; on failure raise a short, readable error (last lines of ffmpeg's output)."""
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd)
+    if r.returncode != 0:
+        tail = " ".join((r.stderr or "").strip().splitlines()[-2:])[:240]
+        raise RuntimeError(f"{what} failed: {tail or 'ffmpeg exit code ' + str(r.returncode)}")
+
+
 def _even(x):
     return int(x) // 2 * 2
 
@@ -167,9 +175,9 @@ def render(src: str, out: Path, streamer: dict, plan: dict, words: list, cfg: di
            "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "48000",
            *_venc(c.get("encoder", "h264_nvenc")), "-pix_fmt", "yuv420p", "-fps_mode", "cfr",
            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
-    subprocess.run(cmd, check=True, cwd=out.parent)
+    _ffmpeg(cmd, "Render", cwd=out.parent)
     preview = out.with_name(out.stem + ".preview.mp4")
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(out), "-vf", "scale=540:-2",
-                    *_venc(c.get("encoder", "h264_nvenc"), preview=True), "-pix_fmt", "yuv420p",
-                    "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(preview)], check=True)
+    _ffmpeg(["ffmpeg", "-v", "error", "-y", "-i", str(out), "-vf", "scale=540:-2",
+             *_venc(c.get("encoder", "h264_nvenc"), preview=True), "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(preview)], "Preview")
     return out, preview

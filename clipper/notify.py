@@ -60,7 +60,7 @@ class Notifier:
         out = {}
         if self.telegram_ready():
             try:
-                self.tg_message("✅ GTA Clipper is connected. You'll get clips here.")
+                self.tg_message("✅ Live Clipper is connected. You'll get clips here.")
                 out["telegram"] = "ok"
             except Exception as e:  # noqa: BLE001
                 out["telegram"] = f"failed: {e}"
@@ -68,7 +68,7 @@ class Notifier:
             out["telegram"] = "not configured"
         for url in self.n.get("webhooks") or []:
             try:
-                _post_json(url, {"type": "test", "message": "GTA Clipper webhook test"})
+                _post_json(url, {"type": "test", "message": "Live Clipper webhook test"})
                 out[url] = "ok"
             except Exception as e:  # noqa: BLE001
                 out[url] = f"failed: {e}"
@@ -94,6 +94,6 @@ class Notifier:
             elif type_ == "clip.approved" and self.n.get("telegram_final", True):
                 self.tg_file(Path(files["final"]), "✅ Ready to post\n\n" + data["caption"], as_video=False)
             elif type_ == "update.available":
-                self.tg_message(f"⬆️ GTA Clipper {data['latest']} is available (you have {data['current']}).")
+                self.tg_message(f"⬆️ Live Clipper {data['latest']} is available (you have {data['current']}).")
         except Exception as e:  # noqa: BLE001
             log(f"[notify] telegram: {e}", "warn")
