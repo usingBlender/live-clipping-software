@@ -9,3 +9,4 @@ fonts/*.otf
 *.png
 !web/static/*.png
 !packaging/*.png
+!docs/images/*.png
