@@ -1,12 +1,12 @@
-<!doctype html><meta charset="utf-8"><title>Live Clipper packages</title>
+<!doctype html><meta charset="utf-8"><title>GTA Clipper packages</title>
 <body style="font-family:system-ui;max-width:760px;margin:40px auto;line-height:1.5">
-<h1>Live Clipper packages</h1>
-<h2>Fedora (dnf)</h2><pre>sudo curl -fsSL -o /etc/yum.repos.d/live-clipper.repo https://usingblender.github.io/live-clipping-software/rpm/live-clipper.repo
-sudo dnf install live-clipper
-systemctl --user enable --now live-clipper</pre>
+<h1>GTA Clipper packages</h1>
+<h2>Fedora (dnf)</h2><pre>sudo curl -fsSL -o /etc/yum.repos.d/gta-clipper.repo https://usingblender.github.io/live-clipping-software/rpm/gta-clipper.repo
+sudo dnf install gta-clipper
+systemctl --user enable --now gta-clipper</pre>
 <h2>Ubuntu / Debian (apt)</h2><pre>sudo install -d /etc/apt/keyrings
-curl -fsSL https://usingblender.github.io/live-clipping-software/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/live-clipper.gpg
-echo "deb [signed-by=/etc/apt/keyrings/live-clipper.gpg] https://usingblender.github.io/live-clipping-software/deb stable main" | sudo tee /etc/apt/sources.list.d/live-clipper.list
-sudo apt update && sudo apt install live-clipper
-systemctl --user enable --now live-clipper</pre>
+curl -fsSL https://usingblender.github.io/live-clipping-software/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/gta-clipper.gpg
+echo "deb [signed-by=/etc/apt/keyrings/gta-clipper.gpg] https://usingblender.github.io/live-clipping-software/deb stable main" | sudo tee /etc/apt/sources.list.d/gta-clipper.list
+sudo apt update && sudo apt install gta-clipper
+systemctl --user enable --now gta-clipper</pre>
 <h2>Windows</h2><p>Download the latest <b>setup.exe</b> from the GitHub Releases page.</p></body>
