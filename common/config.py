@@ -1,7 +1,7 @@
 """Settings live in one YAML file that the UI reads and writes.
 
-Location (first match):  $GTA_CLIPPER_CONFIG  ->  ./config.yaml in the app folder (dev)  ->
-  Windows: %APPDATA%/gta-clipper/config.yaml     Linux: ~/.config/gta-clipper/config.yaml
+Location (first match):  $LIVE_CLIPPER_CONFIG  ->  ./config.yaml in the app folder (dev)  ->
+  Windows: %APPDATA%/live-clipper/config.yaml     Linux: ~/.config/live-clipper/config.yaml
 Missing keys are filled from DEFAULTS, so old config files keep working after updates.
 """
 import copy
@@ -15,7 +15,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULTS = {
-    "data_dir": "~/gta-clipper-data",
+    "data_dir": "~/live-clipper-data",
     "retention_hours": 24,
     "onboarded": False,
     "auth": {"password_hash": ""},
@@ -74,15 +74,20 @@ STREAMER_DEFAULTS = {
 
 
 def config_path() -> Path:
-    if os.environ.get("GTA_CLIPPER_CONFIG"):
-        return Path(os.environ["GTA_CLIPPER_CONFIG"])
+    if os.environ.get("LIVE_CLIPPER_CONFIG"):
+        return Path(os.environ["LIVE_CLIPPER_CONFIG"])
     if (ROOT / "config.yaml").exists():
         return ROOT / "config.yaml"
     if sys.platform == "win32":
         base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return base / "gta-clipper" / "config.yaml"
+    new = base / "live-clipper" / "config.yaml"
+    old = base / "gta-clipper" / "config.yaml"  # name used before v0.3
+    if not new.exists() and old.exists():
+        new.parent.mkdir(parents=True, exist_ok=True)
+        new.write_bytes(old.read_bytes())
+    return new
 
 
 def _merge(dst: dict, src: dict) -> dict:

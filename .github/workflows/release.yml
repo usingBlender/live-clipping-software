@@ -61,7 +61,7 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$env:VERSION" packaging\windows\gta-clipper.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$env:VERSION" packaging\windows\live-clipper.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # Optional code signing (removes the SmartScreen warning) - see docs/CI-CD guide, section "Signing".
       - uses: actions/upload-artifact@v4

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Live Clipper
+Comment=Turn livestream hype moments into shorts
+Exec=live-clipper
+Icon=live-clipper
+Terminal=false
+Categories=AudioVideo;Video;

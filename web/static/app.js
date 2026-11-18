@@ -1,4 +1,4 @@
-/* GTA Clipper web UI - no build step, no dependencies. */
+/* Live Clipper web UI - no build step, no dependencies. */
 "use strict";
 
 const S = {
@@ -76,7 +76,7 @@ function renderLogin() {
   <div class="ob"><div class="box login">
     <div class="row" style="justify-content:center;margin-bottom:18px"><img src="/icon.svg" width="54"></div>
     <div class="card">
-      <h1>Welcome back</h1><p class="muted">Enter your GTA Clipper password.</p>
+      <h1>Welcome back</h1><p class="muted">Enter your Live Clipper password.</p>
       <form id="lf"><div class="field"><input type="password" id="pw" autocomplete="current-password" placeholder="Password" autofocus></div>
       <button class="btn pri" style="width:100%">Log in</button><p id="err" class="small" style="color:var(--red)"></p></form>
     </div></div></div>`;
@@ -96,7 +96,7 @@ function renderOnboarding(needPassword) {
   const step = S.ob.step;
   const bars = OB_STEPS.map((_, i) => `<i class="${i <= step ? "on" : ""}"></i>`).join("");
   root().innerHTML = `<div class="ob"><div class="box">
-    <div class="row" style="margin-bottom:14px"><img src="/icon.svg" width="34"><b style="font-size:18px">GTA Clipper</b><span class="sp" style="flex:1"></span><span class="dim small">Step ${step + 1} of ${OB_STEPS.length}</span></div>
+    <div class="row" style="margin-bottom:14px"><img src="/icon.svg" width="34"><b style="font-size:18px">Live Clipper</b><span class="sp" style="flex:1"></span><span class="dim small">Step ${step + 1} of ${OB_STEPS.length}</span></div>
     <div class="steps">${bars}</div><div class="card" id="obc"></div></div></div>`;
   const c = $("#obc");
   [obPassword, obWelcome, obSystem, obStreamer, obPhone, obDone][step](c);
@@ -127,7 +127,7 @@ function obPassword(c) {
 }
 
 function obWelcome(c) {
-  c.innerHTML = `<h1>Welcome to <span class="grad-text">GTA Clipper</span></h1>
+  c.innerHTML = `<h1>Welcome to <span class="grad-text">Live Clipper</span></h1>
   <p class="muted">It watches GTA 6 livestreams for you and turns the best moments into ready-to-post shorts.</p>
   <div class="grid" style="gap:10px;margin:16px 0">
     <div class="li"><span class="pill live">1</span><span><b>Watches</b> — records each stream and reads its chat, live.</span></div>
@@ -253,11 +253,11 @@ function renderShell() {
   const pending = S.ov?.stats?.pending_total || 0;
   const nav = [["dashboard", "Dashboard", ICON.dash], ["clips", "Clips", ICON.clips], ["streamers", "Streamers", ICON.streamers], ["settings", "Settings", ICON.settings], ["help", "Help", ICON.help]];
   root().innerHTML = `<div class="app">
-    <aside class="side"><div class="brand"><img src="/icon.svg">GTA Clipper</div>
+    <aside class="side"><div class="brand"><img src="/icon.svg">Live Clipper</div>
       <nav class="nav">${nav.map(([k, l, i]) => `<a href="#/${k}" data-tour="nav-${k}" class="${view === k ? "on" : ""}">${i}<span>${l}</span>${k === "clips" && pending ? `<span class="badge" id="pendBadge">${pending}</span>` : ""}</a>`).join("")}</nav>
       <div class="side-foot"><span class="conn"><span class="dot ${S.connected ? "ok" : "warn"}" id="connDot"></span><span id="connTxt">${S.connected ? "Live updates on" : "Connecting…"}</span></span><span>v${esc(S.state.version)}</span></div>
     </aside>
-    <div><div class="mob-top"><img src="/icon.svg">GTA Clipper<span class="sp"></span><span class="dot ${S.connected ? "ok" : "warn"}" id="connDot2"></span></div>
+    <div><div class="mob-top"><img src="/icon.svg">Live Clipper<span class="sp"></span><span class="dot ${S.connected ? "ok" : "warn"}" id="connDot2"></span></div>
     <main class="main" id="view"></main></div></div>`;
   const v = $("#view");
   ({ dashboard: viewDashboard, clips: arg ? () => viewClip(v, arg) : viewClips, streamers: viewStreamers, settings: viewSettings, help: viewHelp }[view] || viewDashboard)(v);
@@ -703,7 +703,7 @@ async function setUpdates(el, s) {
   const u = s.update;
   el.innerHTML = `<div class="card" id="ust"><h2>Version</h2><div class="dim">Checking…</div></div>
     <form class="card" style="margin-top:14px" onsubmit="return false"><h2>Update source</h2>
-    ${textField("repo", "GitHub repository", u.repo, "owner/name of the repo that publishes releases, e.g. yourname/gta-clipper")}
+    ${textField("repo", "GitHub repository", u.repo, "owner/name of the repo that publishes releases, e.g. yourname/live-clipper")}
     ${switchField("auto_install", "Install updates automatically (Windows & git installs)", u.auto_install, "Waits until no clip is being edited. Linux packages update through dnf/apt.")}
     ${rangeField("check_hours", "Check every (hours)", u.check_hours, 1, 48, 1)}
     <button class="btn pri" id="save">Save</button></form>`;
@@ -761,7 +761,7 @@ function viewHelp(v) {
     ["Is it safe to open from my phone?", "With Tailscale serve, only your own devices can reach it, and the app still requires your password. Never enable Tailscale Funnel."],
   ];
   v.innerHTML = `<div class="head"><h1>Help</h1></div>
-    <div class="row" style="margin-bottom:14px"><button class="btn pri" id="tourBtn">▶ Take the tour</button><a class="btn" href="/docs/GTA-Clipper-Guide.pdf" target="_blank">📘 Full guide (PDF)</a></div>
+    <div class="row" style="margin-bottom:14px"><button class="btn pri" id="tourBtn">▶ Take the tour</button><a class="btn" href="/docs/Live-Clipper-Guide.pdf" target="_blank">📘 Full guide (PDF)</a></div>
     <div class="grid">${qa.map(([q, a]) => `<details class="card"><summary style="cursor:pointer;font-weight:700">${q}</summary><p class="muted" style="margin:10px 0 0">${a}</p></details>`).join("")}</div>`;
   $("#tourBtn").onclick = () => { location.hash = "#/dashboard"; setTimeout(startTour, 600); };
 }
