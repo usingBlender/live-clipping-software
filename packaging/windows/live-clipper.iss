@@ -1,7 +1,7 @@
 ; Inno Setup script for the Windows installer.
 ; CI builds it with:  iscc /DMyAppVersion=1.2.3 packaging\windows\live-clipper.iss
 ; Per-user install (no admin prompt), so the in-app updater can run it silently.
-; Python + dependencies are installed by uv.exe, called directly from [Code] (no PowerShell scripts,
+; A bundled Python (build\python) + dependencies installed by uv.exe, called directly from [Code] (no PowerShell scripts,
 ; so it also works where company policy blocks .ps1 files). Log: %LOCALAPPDATA%\live-clipper\install.log
 
 #define MyAppName "Live Clipper"
@@ -37,6 +37,7 @@ Name: "autostart"; Description: "Start Live Clipper automatically when I log in 
 [Files]
 Source: "..\..\build\app\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 Source: "..\..\build\uv.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
+Source: "..\..\build\python\*"; DestDir: "{app}\python"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "live-clipper.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
@@ -103,7 +104,9 @@ begin
     ForceDirectories(ExtractFileDir(LogFile));
     SaveStringToFile(LogFile, #13#10 + '=== Live Clipper {#MyAppVersion} install ' + GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + ' ===' + #13#10, True);
 
-    Ok := RunLogged(Uv, 'venv --allow-existing --python 3.12 "' + App + '\.venv"', 'Installing Python 3.12...');
+    // Bundled Python in the app folder: no download, no folder junctions (os error 448 on locked-down PCs)
+    Ok := RunLogged(Uv, 'venv --allow-existing --no-python-downloads --python "' + App + '\python\python.exe" "' + App + '\.venv"',
+                    'Creating the Python environment...');
     if Ok then
       Ok := RunLogged(Uv, 'pip install --python "' + Py + '" -r "' + App + '\requirements.txt"',
                       'Installing dependencies (first install downloads 1-2 GB, this can take several minutes)...');

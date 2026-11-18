@@ -53,6 +53,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Prepare build
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
