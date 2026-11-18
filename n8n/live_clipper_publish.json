@@ -1,5 +1,5 @@
 {
-  "name": "GTA Clipper: approved clip → upload",
+  "name": "Live Clipper: approved clip → upload",
   "nodes": [
     {
       "parameters": {
@@ -64,7 +64,7 @@
     },
     {
       "parameters": {
-        "content": "## Auto-upload approved clips\nGTA Clipper POSTs every event to this webhook (add its URL in Settings → Notifications → Webhooks). This flow handles `clip.approved`: it downloads the final video (signed link, no login needed) and sends it to Telegram. After your YouTube/TikTok API audits, add upload nodes after **Get final video** (binary property `data`).",
+        "content": "## Auto-upload approved clips\nLive Clipper POSTs every event to this webhook (add its URL in Settings → Notifications → Webhooks). This flow handles `clip.approved`: it downloads the final video (signed link, no login needed) and sends it to Telegram. After your YouTube/TikTok API audits, add upload nodes after **Get final video** (binary property `data`).",
         "width": 520,
         "height": 160
       },

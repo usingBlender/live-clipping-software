@@ -1,6 +1,6 @@
 # Builds the .deb and .rpm:  VERSION=1.2.3 nfpm pkg --packager deb|rpm --config packaging/nfpm.yaml --target dist/
 # Run from the repo root after CI has prepared build/app (app files) and build/uv (uv binary).
-name: gta-clipper
+name: live-clipper
 arch: amd64
 platform: linux
 version: ${VERSION}
@@ -9,9 +9,9 @@ section: video
 priority: optional
 maintainer: ${MAINTAINER}
 description: |
-  GTA Clipper watches livestreams, detects hype moments from chat and voice,
+  Live Clipper watches livestreams, detects hype moments from chat and voice,
   and turns them into captioned vertical shorts you approve from a web dashboard.
-vendor: GTA Clipper
+vendor: Live Clipper
 homepage: ${HOMEPAGE}
 license: MIT
 depends:
@@ -25,23 +25,23 @@ overrides:
       - ffmpeg
 contents:
   - src: ./build/app/
-    dst: /opt/gta-clipper/
+    dst: /opt/live-clipper/
     type: tree
   - src: ./build/uv
-    dst: /opt/gta-clipper/bin/uv
+    dst: /opt/live-clipper/bin/uv
     file_info: {mode: 0755}
   - src: ./packaging/linux/setup-env.sh
-    dst: /opt/gta-clipper/setup-env.sh
+    dst: /opt/live-clipper/setup-env.sh
     file_info: {mode: 0755}
-  - src: ./packaging/linux/gta-clipper
-    dst: /usr/bin/gta-clipper
+  - src: ./packaging/linux/live-clipper
+    dst: /usr/bin/live-clipper
     file_info: {mode: 0755}
-  - src: ./packaging/linux/gta-clipper.service
-    dst: /usr/lib/systemd/user/gta-clipper.service
-  - src: ./packaging/linux/gta-clipper.desktop
-    dst: /usr/share/applications/gta-clipper.desktop
+  - src: ./packaging/linux/live-clipper.service
+    dst: /usr/lib/systemd/user/live-clipper.service
+  - src: ./packaging/linux/live-clipper.desktop
+    dst: /usr/share/applications/live-clipper.desktop
   - src: ./packaging/icon-512.png
-    dst: /usr/share/icons/hicolor/512x512/apps/gta-clipper.png
+    dst: /usr/share/icons/hicolor/512x512/apps/live-clipper.png
 scripts:
   postinstall: ./packaging/linux/postinstall.sh
   preremove: ./packaging/linux/preremove.sh

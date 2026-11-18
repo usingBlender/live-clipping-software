@@ -1,0 +1,8 @@
+#!/bin/sh
+# /usr/bin/live-clipper - starts Live Clipper (or opens it if it's already running)
+APP=/opt/live-clipper
+if [ ! -x "$APP/.venv/bin/python" ]; then
+  echo "Live Clipper's Python environment is missing. Run: sudo $APP/setup-env.sh" >&2
+  exit 1
+fi
+cd "$APP" && exec "$APP/.venv/bin/python" -m web "$@"

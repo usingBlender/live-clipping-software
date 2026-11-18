@@ -36,7 +36,7 @@ def install_kind() -> str:
 def fetch_latest(repo: str) -> dict:
     req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest",
                                  headers={"Accept": "application/vnd.github+json",
-                                          "User-Agent": f"gta-clipper/{__version__}"})
+                                          "User-Agent": f"live-clipper/{__version__}"})
     with urllib.request.urlopen(req, timeout=20) as r:
         return json.loads(r.read())
 
@@ -69,8 +69,8 @@ class Updater:
         except Exception as e:  # noqa: BLE001
             info.update(available=False, error=str(e)[:200])
         if info.get("available"):
-            info["command"] = {"apt": "sudo apt update && sudo apt install --only-upgrade gta-clipper",
-                               "dnf": "sudo dnf upgrade --refresh gta-clipper"}.get(info["kind"])
+            info["command"] = {"apt": "sudo apt update && sudo apt install --only-upgrade live-clipper",
+                               "dnf": "sudo dnf upgrade --refresh live-clipper"}.get(info["kind"])
             if self._notified != info["latest"]:
                 self._notified = info["latest"]
                 bus.publish("update.available", {"latest": info["latest"], "current": __version__})
@@ -125,7 +125,7 @@ def restart_self():
     otherwise start a fresh copy and exit."""
     def _go():
         time.sleep(1)
-        if os.environ.get("GTA_CLIPPER_SUPERVISED"):
+        if os.environ.get("LIVE_CLIPPER_SUPERVISED"):
             os._exit(3)
         subprocess.Popen([sys.executable, "-m", "web", "--no-browser"], cwd=str(ROOT), close_fds=True)
         os._exit(0)
