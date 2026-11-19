@@ -11,9 +11,18 @@ from pathlib import Path
 
 # streamlink/uv live next to the venv's python; winget puts ffmpeg in WinGet\Links, which a freshly
 # installed app may not have on PATH until the next login.
-_extra = [str(Path(sys.executable).parent)]
-if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
-    _extra.append(str(Path(os.environ["LOCALAPPDATA"]) / "Microsoft" / "WinGet" / "Links"))
+# Background services (systemd, log-in shortcuts) get a minimal PATH, so also look where the Claude Code,
+# npm and pip installers put their commands.
+_home = Path.home()
+_extra = [str(Path(sys.executable).parent), str(_home / ".local" / "bin"), str(_home / ".claude" / "local"),
+          str(_home / ".npm-global" / "bin"), str(_home / "bin")]
+if sys.platform == "win32":
+    if os.environ.get("LOCALAPPDATA"):
+        _extra.append(str(Path(os.environ["LOCALAPPDATA"]) / "Microsoft" / "WinGet" / "Links"))
+    if os.environ.get("APPDATA"):
+        _extra.append(str(Path(os.environ["APPDATA"]) / "npm"))
+else:
+    _extra += ["/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin"]
 os.environ["PATH"] = os.pathsep.join([p for p in _extra if Path(p).is_dir()] + [os.environ.get("PATH", "")])
 
 if sys.platform == "win32" and not getattr(subprocess.Popen, "_gc_patched", False):
