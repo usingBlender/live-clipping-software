@@ -1,3 +1,4 @@
+import pytest
 from pathlib import Path
 
 from clipper import plan, render, sfx
@@ -134,3 +135,29 @@ def test_fact_check_with_claude_answers(monkeypatch):
 def test_clean_text_strips_codes_and_emoji():
     assert plan.clean_text("{\\p1}m 0 0 l 5 5{\\p0} CAIU 🦶!") == "m 0 0 l 5 5 CAIU !"
     assert plan.clean_text("Título 😭", allow_emoji=True) == "Título 😭"
+
+
+def test_user_edit_validates_and_converts():
+    b = {"start": 20, "end": 50, "cuts": [[30, 33], [32, 35], [48, 60], [10, 21]], "hook_text": "olha {\\p1}isso",
+         "captions_on": False, "words": [{"w": "oi", "s": 25, "e": 25.4}, {"w": "", "s": 1, "e": 2}],
+         "edits": [{"type": "text", "t": 40, "dur": 99, "text": "CAIU 🦶", "user": True},
+                   {"type": "sfx", "t": 41, "name": "nope"}, {"type": "sfx", "t": 42, "name": "boom", "volume": 5},
+                   {"type": "zoom", "t": 10, "dur": 1}, {"type": "zoom", "t": 44, "dur": 1, "amount": 9, "focus": "x"}]}
+    e = plan.user_edit(b, 60, {"boom"})
+    assert (e["start"], e["end"]) == (21, 48)                 # cuts touching the ends become trims
+    assert e["cuts"] == [[9, 14]]                               # overlapping cuts merged, clip time
+    assert [x["type"] for x in e["edits"]] == ["text", "sfx", "zoom"]
+    t, s, z = e["edits"]
+    assert t["text"] == "CAIU" and t["dur"] == 8 and t["t"] == 19 and t["user"]
+    assert s["volume"] == 2.0 and z["amount"] == 2.0 and z["focus"] == "center"
+    assert e["hook_text"] == "OLHA ISSO" and e["captions_on"] is False and len(e["words"]) == 1
+    with pytest.raises(ValueError):
+        plan.user_edit({"start": 10, "end": 12, "cuts": [[10.5, 11.8]]}, 60, set())
+
+
+def test_cuts_in_filtergraphs():
+    vf = render.effects_graph(S, 1920, 1080, 30, 0, 600, [], "c.ass", False, [(2.0, 4.5)])
+    assert "[vc]select='not(between(t,2.000,4.500))',setpts=N/(30.000000*TB)[v]" in vf
+    af = render.audio_graph(0, 20, [], [(2.0, 4.5)])
+    assert "aselect='not(between(t,2.000,4.500))',asetpts=N/SR/TB,loudnorm" in af
+    assert "select" not in render.effects_graph(S, 1920, 1080, 30, 0, 600, [], None, False)

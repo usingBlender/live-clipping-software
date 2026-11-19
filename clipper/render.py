@@ -203,9 +203,15 @@ def _between(spans):
     return "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in spans) or "0"
 
 
+def _keep_expr(cuts) -> str:
+    return "not(" + "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in cuts) + ")"
+
+
 def effects_graph(s: dict, sw: int, sh: int, fps: float, f0: int, f1: int, edits: list, captions_ass: str | None,
-                  fonts: bool) -> str:
-    """Video filtergraph: [0:v] -> renumbered, cut, laid out, effects, captions -> [v]."""
+                  fonts: bool, cuts: list | None = None) -> str:
+    """Video filtergraph: [0:v] -> renumbered, cut, laid out, effects, captions -> [v].
+    cuts: parts removed in the editor, in clip time. Everything is laid out on the uncut clip timeline,
+    then those parts are dropped at the very end, so effects and captions stay in sync."""
     cam_top = s.get("layout", "cam_top") == "cam_top"
     focus_spans = [(e["t"], e["t"] + e["dur"]) for e in edits if e["type"] == "cam_focus" and cam_top]
     g = [f"[0:v]setpts=N/({fps:.6f}*TB),trim=start_frame={f0}:end_frame={f1},setpts=PTS-STARTPTS[src]"]
@@ -241,20 +247,24 @@ def effects_graph(s: dict, sw: int, sh: int, fps: float, f0: int, f1: int, edits
                      f"crop={W}:{H}:x='(iw-ow)/2+22*sin(t*61)':y='(ih-oh)/2+18*cos(t*53)'[sh{k}]")
             g.append(f"[sk{k}][sh{k}]overlay=0:0:enable='{_between([(a, b)])}'[se{k}]")
             cur = f"[se{k}]"
+    last = "[vc]" if cuts else "[v]"
     if captions_ass:
-        g.append(f"{cur}ass=filename={captions_ass}" + (":fontsdir=fonts" if fonts else "") + "[v]")
+        g.append(f"{cur}ass=filename={captions_ass}" + (":fontsdir=fonts" if fonts else "") + last)
     else:
-        g.append(f"{cur}null[v]")
+        g.append(f"{cur}null{last}")
+    if cuts:
+        g.append(f"[vc]select='{_keep_expr(cuts)}',setpts=N/({fps:.6f}*TB)[v]")
     return ";".join(g)
 
 
-def audio_graph(t0: float, t1: float, sfx_inputs: list[tuple[int, float, float]]) -> str:
+def audio_graph(t0: float, t1: float, sfx_inputs: list[tuple[int, float, float]], cuts: list | None = None) -> str:
     """[0:a] renumbered by sample count, cut, plus sound effects mixed in -> [a].
-    sfx_inputs: (input_index, time_s, volume)."""
+    sfx_inputs: (input_index, time_s, volume). cuts: removed parts in clip time (see effects_graph)."""
     g = [f"[0:a]asetpts=N/SR/TB,atrim=start={t0:.3f}:end={t1:.3f},asetpts=PTS-STARTPTS,"
          f"aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a0]"]
+    drop = f"aselect='{_keep_expr(cuts)}',asetpts=N/SR/TB," if cuts else ""
     if not sfx_inputs:
-        g.append("[a0]loudnorm=I=-14:TP=-1.5:LRA=11[a]")
+        g.append(f"[a0]{drop}loudnorm=I=-14:TP=-1.5:LRA=11[a]")
         return ";".join(g)
     labels = ["[a0]"]
     for i, (idx, t, vol) in enumerate(sfx_inputs):
@@ -262,7 +272,7 @@ def audio_graph(t0: float, t1: float, sfx_inputs: list[tuple[int, float, float]]
         g.append(f"[{idx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
                  f"adelay={ms}|{ms},volume={vol:.2f}[fx{i}]")
         labels.append(f"[fx{i}]")
-    g.append(f"{''.join(labels)}amix=inputs={len(labels)}:duration=first:normalize=0,"
+    g.append(f"{''.join(labels)}amix=inputs={len(labels)}:duration=first:normalize=0,{drop}"
              f"loudnorm=I=-14:TP=-1.5:LRA=11[a]")
     return ";".join(g)
 
@@ -341,8 +351,9 @@ def render(src: str, out: Path, streamer: dict, plan: dict, words: list, cfg: di
             extra_inputs += ["-i", str(sfx_lib[e["name"]]["path"])]
             gain = 10 ** (float(sfx_lib[e["name"]].get("gain_db", 0.0)) / 20)  # loudness-matched once per file
             sfx_in.append((i + 1, float(e["t"]), vol * gain * float(e.get("volume", 1.0))))
-        vf = effects_graph(streamer, sw, sh, fps, f0, f1, ed, ass_path.name if captions else None, use_fonts)
-        af = audio_graph(start, end, sfx_in)
+        cuts = [(float(a), float(b)) for a, b in plan.get("cuts") or []]
+        vf = effects_graph(streamer, sw, sh, fps, f0, f1, ed, ass_path.name if captions else None, use_fonts, cuts)
+        af = audio_graph(start, end, sfx_in, cuts)
         cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(src), *extra_inputs,
                "-filter_complex", vf + ";" + af, "-map", "[v]", "-map", "[a]",
                *_venc(enc), "-pix_fmt", "yuv420p", "-r", f"{min(fps, 60):.3f}", "-fps_mode", "cfr",
@@ -367,6 +378,37 @@ def render(src: str, out: Path, streamer: dict, plan: dict, words: list, cfg: di
              *_venc(used_enc, preview=True), "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(preview)], "Preview")
     return out, preview
+
+
+def editor_proxy(src: str, out: Path) -> Path:
+    """Small, easy-to-seek copy of the source for the in-app editor. Same timing rule as render()
+    (frames renumbered in arrival order), so what you see at t is what gets rendered at t."""
+    _, _, fps = probe_full(src)
+    _ffmpeg(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-vf", f"setpts=N/({fps:.6f}*TB),scale=-2:540",
+             "-af", "asetpts=N/SR/TB", "-fps_mode", "passthrough", "-c:v", "libx264", "-preset", "veryfast",
+             "-crf", "30", "-g", "15", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", "-ar", "48000",
+             "-movflags", "+faststart", str(out)], "Editor preview")
+    return out
+
+
+def editor_geometry(s: dict, sw: int, sh: int) -> dict:
+    """Where everything goes on the 1080x1920 frame, so the editor can draw a live preview of the render."""
+    cam_top = s.get("layout", "cam_top") == "cam_top"
+    zoom = float(s.get("game_zoom", 1.0))
+    g = {"W": W, "H": H, "sw": sw, "sh": sh, "layout": "cam_top" if cam_top else "fit_blur",
+         "text": text_positions(s, "cam_top" if cam_top else "fit_blur"),
+         "focus": {k: focus_point(s, k) for k in ("cam", "game", "center")}}
+    if cam_top:
+        ch_out = cam_height(s)
+        cw, ch, cx, cy = cam_box(s, sw, sh)
+        gh = _even(sh / zoom)
+        gw = _even(min(sw, gh * W / (H - ch_out)))
+        gx = _even(min(max(0, s.get("game_center_x", 0.5) * sw - gw / 2), sw - gw))
+        gy = _even((sh - gh) / 2)
+        g.update(cam=[cx, cy, cw, ch], cam_h=ch_out, game=[gx, gy, gw, gh])
+    else:
+        g.update(crop=[_even(sw / zoom), _even(sh / zoom)])
+    return g
 
 
 def frame_grid(src: str, out_jpg: Path, start: float, end: float, n: int = 12) -> list[float]:

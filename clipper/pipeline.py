@@ -42,6 +42,9 @@ class Worker:
         for st in ("queued", "processing"):
             for row in self.db.list(status=st, limit=50):
                 try:
+                    if st == "processing" and row.get("output_path") and Path(row["output_path"]).exists():
+                        self.db.upsert(id=row["id"], status="pending")   # an editor re-render was interrupted
+                        continue
                     cand = json.loads(row["candidate_json"])
                     if Path(cand["source_path"]).exists():
                         self.q.put(cand)
@@ -65,6 +68,23 @@ class Worker:
     def _run(self):
         while True:
             cand = self.q.get()
+            if cand.get("_job") == "rerender":
+                self.current = {"clip_id": cand["clip_id"], "streamer": cand["streamer"], "stage": "rendering",
+                                "since": time.time()}
+                try:
+                    self._rerender(cand["clip_id"], cand["edit"])
+                except Exception as e:  # noqa: BLE001
+                    log(f"[editor] {cand['clip_id']} render failed: {e}", "error")
+                    try:
+                        p = json.loads(self.db.get(cand["clip_id"]).get("plan_json") or "{}")
+                        p["edit_error"] = f"Your edit couldn't be rendered: {str(e)[:250]}"
+                        self.db.upsert(id=cand["clip_id"], status="pending", plan_json=p)
+                    except Exception:  # noqa: BLE001
+                        self.db.upsert(id=cand["clip_id"], status="pending")
+                    bus.publish("clip.edit_failed", {"clip_id": cand["clip_id"], "reason": str(e)[:300]})
+                finally:
+                    self.current = None
+                continue
             self.current = {"clip_id": cand["clip_id"], "streamer": cand["streamer"], "stage": "transcribing",
                             "since": time.time()}
             try:
@@ -95,6 +115,11 @@ class Worker:
         self.db.upsert(id=cid, status="processing")
         self._stage(cid, "transcribing")
         tr = transcribe(cfg, cand["source_path"], lang)
+        try:   # kept for the editor (captions of any line can be restored later)
+            (cfg["data_dir"] / "renders").mkdir(parents=True, exist_ok=True)
+            (cfg["data_dir"] / "renders" / f"{cid}.transcript.json").write_text(json.dumps(tr), encoding="utf-8")
+        except OSError:
+            pass
         self._stage(cid, "judging")
         lib = sfxmod.library(cfg["data_dir"])
         frames = None
@@ -116,6 +141,8 @@ class Worker:
         out = cfg["data_dir"] / "renders" / f"{cid}.mp4"
         words = caption_words(tr, s.get("captions", "streamer"), plan.get("streamer_segments"), lang)
         out, preview = rendermod.render(cand["source_path"], out, s, plan, words, cfg, lib)
+        plan["words"] = words
+        plan["captions_on"] = True
         used = {e.get("name") for e in plan.get("edits") or [] if e.get("type") == "sfx"}
         plan["sfx_credits"] = sorted({lib[n]["credit"] for n in used if n in lib and lib[n].get("credit")})
         self.db.upsert(id=cid, status="pending", title=plan["title"], hashtags=" ".join(plan["hashtags"]),
@@ -132,6 +159,67 @@ class Worker:
         bus.publish("clip.rendered", res)
         self.notifier.event("clip.rendered", res, {"preview": str(preview)})
         return res
+
+    # ------------------------------------------------------------ in-app editor
+    def submit_edit(self, cid: str, edit: dict):
+        row = self.db.get(cid)
+        self.db.upsert(id=cid, status="processing")
+        self.q.put({"_job": "rerender", "clip_id": cid, "streamer": row["streamer"], "edit": edit})
+        bus.publish("clip.queued", {"clip_id": cid, "streamer": row["streamer"], "queue": self.q.qsize()})
+
+    def _rerender(self, cid: str, edit: dict):
+        cfg = self.cfg
+        row = self.db.get(cid)
+        cand = json.loads(row["candidate_json"])
+        plan = json.loads(row.get("plan_json") or "{}")
+        try:
+            s = self.store.streamer(cand["streamer"])
+        except KeyError:
+            s = {"layout": "fit_blur"}
+        plan.setdefault("ai", {k: plan.get(k) for k in ("start", "end", "edits", "hook_text")})
+        plan.update(edit, edited=time.time())
+        plan.pop("edit_error", None)
+        lib = sfxmod.library(cfg["data_dir"])
+        out = cfg["data_dir"] / "renders" / f"{cid}.mp4"
+        t0 = time.time()
+        out, preview = rendermod.render(cand["source_path"], out, s, plan,
+                                        plan["words"] if plan.get("captions_on", True) else [], cfg, lib)
+        used = {e.get("name") for e in plan.get("edits") or [] if e.get("type") == "sfx"}
+        plan["sfx_credits"] = sorted({lib[n]["credit"] for n in used if n in lib and lib[n].get("credit")})
+        self.db.upsert(id=cid, status="pending", hook=plan.get("hook_text", ""), output_path=str(out),
+                       preview_path=str(preview), plan_json=plan)
+        log(f"[editor] {cid} re-rendered with your edits in {time.time() - t0:.0f}s")
+        bus.publish("clip.updated", {"clip_id": cid, "streamer": cand["streamer"]})
+
+    def prepare_editor(self, cid: str, job: dict):
+        """Builds the editor's preview video, and caption words for clips made before the editor existed."""
+        cfg = self.cfg
+        row = self.db.get(cid)
+        cand = json.loads(row["candidate_json"])
+        plan = json.loads(row.get("plan_json") or "{}")
+        src = cand["source_path"]
+        if not Path(src).exists():
+            raise FileNotFoundError("the recording for this clip was deleted")
+        proxy = cfg["data_dir"] / "renders" / f"{cid}.editor.mp4"
+        if not proxy.exists():
+            job["msg"] = "making a preview copy"
+            rendermod.editor_proxy(src, proxy.with_suffix(".tmp.mp4"))
+            proxy.with_suffix(".tmp.mp4").replace(proxy)
+        if "words" not in plan:
+            job["msg"] = "transcribing (clip made before the editor existed)"
+            try:
+                s = self.store.streamer(cand["streamer"])
+            except KeyError:
+                s = {}
+            lang = s.get("language") or cfg["clipper"].get("language", "pt")
+            tf = cfg["data_dir"] / "renders" / f"{cid}.transcript.json"
+            tr = json.loads(tf.read_text(encoding="utf-8")) if tf.exists() else transcribe(cfg, src, lang)
+            if not tf.exists():
+                tf.write_text(json.dumps(tr), encoding="utf-8")
+            mode = s.get("captions", "streamer")
+            plan["words"] = caption_words(tr, "streamer" if mode == "off" else mode, plan.get("streamer_segments"), lang)
+            plan["captions_on"] = mode != "off"
+            self.db.upsert(id=cid, plan_json=plan)
 
     def approve(self, cid: str, title=None, hashtags=None) -> dict:
         self.db.decide(cid, "approved", title, hashtags)

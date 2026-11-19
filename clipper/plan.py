@@ -471,3 +471,72 @@ def make_plan(cand: dict, tr: dict, cfg: dict, streamer: dict | None = None, sfx
                       frames if plan.get("_saw_frames") else None)
     plan.pop("_saw_frames", None)
     return plan
+
+
+# ---------------------------------------------------------------- manual edits from the in-app editor
+USER_DUR = {"zoom": (0.2, 15), "cam_focus": (0.3, 60), "text": (0.3, 20), "shake": (0.1, 3)}
+
+
+def user_edit(b: dict, src_dur: float, sfx_names: set) -> dict:
+    """Validate what the editor sends. Times come in source-file seconds; edits are returned in clip time,
+    cuts in clip time, caption words in file time (like the pipeline uses)."""
+    f = lambda v, d=0.0: float(v) if v is not None else d  # noqa: E731
+    start = min(max(0.0, f(b.get("start"))), src_dur)
+    end = min(max(start + 1.0, f(b.get("end"), src_dur)), src_dur)
+    cuts = []
+    for a, z in sorted((f(c[0]), f(c[1])) for c in b.get("cuts") or [] if len(c) == 2):
+        a, z = max(a, start), min(z, end)
+        if z - a < 0.05:
+            continue
+        if cuts and a <= cuts[-1][1] + 0.02:
+            cuts[-1][1] = max(cuts[-1][1], z)
+        else:
+            cuts.append([a, z])
+    while cuts and cuts[0][0] <= start + 0.05:
+        start = cuts.pop(0)[1]
+    while cuts and cuts[-1][1] >= end - 0.05:
+        end = cuts.pop()[0]
+    kept = (end - start) - sum(z - a for a, z in cuts)
+    if kept < 2:
+        raise ValueError("the clip must be at least 2 seconds long")
+    if kept > 180:
+        raise ValueError("the clip can be at most 3 minutes long")
+    edits = []
+    for e in b.get("edits") or []:
+        typ = e.get("type")
+        if typ not in ("zoom", "cam_focus", "text", "sfx", "shake"):
+            continue
+        t = f(e.get("t")) - start
+        if t < 0 or t > end - start - 0.05:
+            continue
+        ne = {"type": typ, "t": round(t, 3)}
+        if typ in USER_DUR:
+            lo, hi = USER_DUR[typ]
+            ne["dur"] = round(min(max(f(e.get("dur"), 1.0), lo), hi, end - start - t), 3)
+        if typ == "zoom":
+            ne["amount"] = round(min(max(f(e.get("amount"), 1.3), 1.05), 2.0), 2)
+            ne["focus"] = e.get("focus") if e.get("focus") in ("cam", "game", "center") else "center"
+        elif typ == "text":
+            ne["text"] = clean_text(e.get("text", ""), 60)
+            if not ne["text"]:
+                continue
+        elif typ == "sfx":
+            if e.get("name") not in sfx_names:
+                continue
+            ne["name"] = e["name"]
+            ne["volume"] = round(min(max(f(e.get("volume"), 1.0), 0.0), 2.0), 2)
+        if e.get("why"):
+            ne["why"] = str(e["why"])[:160]
+        if e.get("user"):
+            ne["user"] = True
+        edits.append(ne)
+    words = []
+    for w in b.get("words") or []:
+        s0, e0 = f(w.get("s")), f(w.get("e"))
+        txt = str(w.get("w", "")).strip()[:40]
+        if txt and e0 > s0:
+            words.append({"w": txt, "s": round(s0, 3), "e": round(e0, 3)})
+    return {"start": round(start, 3), "end": round(end, 3),
+            "cuts": [[round(a - start, 3), round(z - start, 3)] for a, z in cuts],
+            "edits": sorted(edits, key=lambda e: e["t"]), "words": sorted(words, key=lambda w: w["s"]),
+            "hook_text": clean_text(b.get("hook_text", ""), 60).upper(), "captions_on": bool(b.get("captions_on", True))}

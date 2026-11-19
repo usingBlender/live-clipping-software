@@ -260,7 +260,8 @@ function renderShell() {
     <div><div class="mob-top"><img src="/icon.svg">Live Clipper<span class="sp"></span><span class="dot ${S.connected ? "ok" : "warn"}" id="connDot2"></span></div>
     <main class="main" id="view"></main></div></div>`;
   const v = $("#view");
-  ({ dashboard: viewDashboard, clips: arg ? () => viewClip(v, arg) : viewClips, streamers: viewStreamers, settings: viewSettings, help: viewHelp }[view] || viewDashboard)(v);
+  if (typeof stopEditor === "function" && !(view === "clips" && arg.endsWith("/edit"))) stopEditor();
+  ({ dashboard: viewDashboard, clips: arg ? (arg.endsWith("/edit") ? () => viewEditor(v, arg.slice(0, -5)) : () => viewClip(v, arg)) : viewClips, streamers: viewStreamers, settings: viewSettings, help: viewHelp }[view] || viewDashboard)(v);
 }
 
 function setConn(on) {
@@ -493,13 +494,14 @@ async function viewClip(v, id) {
   const chat = (c.chat_sample || []).map((m) => `<div class="chatline"><span class="dim">${num(m.t, 0)}s</span> <b>${esc(m.user)}</b> ${esc(m.text)}</div>`).join("") || '<span class="dim small">no chat captured</span>';
   v.innerHTML = `<div class="head"><a class="btn sm ghost" href="#/clips">← Clips</a><span class="sp"></span><span class="pill ${c.status === "pending" ? "live" : ""}">${esc(c.status)}</span></div>
   <div class="detail">
-    <div>${c.has_video ? `<video src="/media/${enc}/video" controls playsinline preload="metadata"></video>` : `<div class="card empty"><div class="big">${c.status === "skipped" ? "🙅" : "⏳"}</div>${esc(c.reason || "No video")}</div>`}</div>
+    <div>${c.status === "processing" && c.has_video ? `<div class="card empty"><div class="big">🎬</div>Rendering your edit…<div class="small muted">This page updates by itself.</div></div>` : c.has_video ? `<video src="/media/${enc}/video?v=${Math.round(c.edited || c.created || 0)}" controls playsinline preload="metadata"></video>` : `<div class="card empty"><div class="big">${c.status === "skipped" ? "🙅" : "⏳"}</div>${esc(c.reason || "No video")}</div>`}</div>
     <div>
       <div class="field"><label>Title</label><input type="text" id="ti" value="${esc(c.title || "")}"></div>
       <div class="field"><label>Hashtags</label><textarea id="ht" rows="2">${esc(c.hashtags || "")}</textarea></div>
       <div class="row" style="margin-bottom:16px">
         ${c.has_video && c.status !== "approved" ? '<button class="btn ok" id="ap">✓ Approve</button>' : ""}
         ${c.has_video && c.status === "pending" ? '<button class="btn bad" id="rj">✕ Reject</button>' : ""}
+        ${c.has_video && c.status !== "processing" ? `<a class="btn" href="#/clips/${enc}/edit">✂ Edit</a>` : ""}
         ${c.has_video ? '<button class="btn" id="cp">Copy caption</button>' : ""}
         ${c.has_video ? `<a class="btn" href="/media/${enc}/video?download=1">Download</a>` : ""}
         ${["skipped", "error", "rejected"].includes(c.status) ? '<button class="btn" id="rt">Re-run</button>' : ""}
@@ -517,6 +519,14 @@ async function viewClip(v, id) {
   const rj = $("#rj"); if (rj) rj.onclick = async () => { await api(`/api/clips/${enc}/reject`, { method: "POST" }); toast("Rejected"); nextPending(id); };
   const cp = $("#cp"); if (cp) cp.onclick = async () => { try { await navigator.clipboard.writeText(caption()); toast("Caption copied"); } catch (e) { prompt("Copy the caption:", caption()); } };
   const rt = $("#rt"); if (rt) rt.onclick = async () => { await api(`/api/clips/${enc}/retry`, { method: "POST" }); toast("Sent back to the editing queue"); location.hash = "#/dashboard"; };
+  if (c.status === "processing" && c.has_video) {      // an editor render is running: refresh when it's done
+    const poll = async () => {
+      if (location.hash !== `#/clips/${enc}`) return;
+      const n = await api(`/api/clips/${enc}`).catch(() => null);
+      if (n && n.status !== "processing") { if (n.edit_error) toast(esc(n.edit_error)); viewClip(v, id); } else setTimeout(poll, 2500);
+    };
+    setTimeout(poll, 2500);
+  }
 }
 async function nextPending(current) {
   const r = await api("/api/clips?status=pending&limit=5");
@@ -729,10 +739,25 @@ function setAI(el, s) {
     <div class="card" style="margin-top:14px"><h2>Sound effects</h2><p class="small muted">Manage and add sounds in <a href="#/settings/sounds">Settings → Sounds</a>.</p></div>
     <form class="card" style="margin-top:14px" onsubmit="return false" id="gen"><h2>Storage</h2>
     <p class="small muted">Recordings are kept in <span class="code">${esc(s.general.data_dir)}</span>. Settings file: <span class="code">${esc(s.general.config_path)}</span></p>
-    ${rangeField("retention_hours", "Keep raw recordings for (hours)", s.general.retention_hours, 2, 96, 1, "About 3.5 GB per hour per 1080p stream. Clips are kept forever.")}
+    ${rangeField("retention_hours", "Keep raw recordings for (hours)", s.general.retention_hours, 2, 96, 1, "Clips are kept forever; only the raw recordings are deleted after this.")}
+    <p class="small" id="stoest" style="margin-top:-6px"></p>
     <button class="btn" id="save2">Save</button></form>`;
   bindForm(el, "clipper");
-  $$("#gen input[type=range]").forEach((r) => (r.oninput = () => (r.nextElementSibling.textContent = r.value)));
+  const sto = s.storage, gb = (b) => (b >= 1e12 ? `${num(b / 1e12, 1)} TB` : `${Math.round(b / 1e9)} GB`);
+  const storageText = (h) => {
+    if (!sto.streams) return `<span class="muted">This drive has ${gb(sto.free_bytes)} free. Add a streamer to see how many hours fit.</span>`;
+    const perHour = sto.streams * sto.gb_per_hour * 1e9;                  // bytes per hour while everyone streams
+    const usable = (sto.free_bytes + sto.recordings_bytes) * 0.9;        // keep 10% of the drive free
+    const fit = Math.floor(usable / perHour), need = h * perHour;
+    const rate = `${sto.streams} stream${sto.streams > 1 ? "s" : ""} × ~${num(sto.gb_per_hour, 1)} GB/h${sto.measured ? " (measured)" : " (estimate for 1080p)"} = ~${num(perHour / 1e9, 1)} GB per hour`;
+    const head = `This drive has <b>${gb(sto.free_bytes)}</b> free${sto.recordings_bytes > 1e9 ? ` (+${gb(sto.recordings_bytes)} of recordings already)` : ""}. ${rate}, so it fits about <b>${fit} hours</b>.`;
+    return h <= fit ? `${head} <span class="muted">At ${h} h, recordings use up to ~${gb(need)}.</span>`
+      : `${head} <span style="color:var(--red)">${h} h needs ~${gb(need)} — lower it to ${Math.max(1, fit)} h or free up space.</span>`;
+  };
+  $$("#gen input[type=range]").forEach((r) => {
+    const upd = () => { r.nextElementSibling.textContent = r.value; if (r.name === "retention_hours") $("#stoest").innerHTML = storageText(+r.value); };
+    r.oninput = upd; upd();
+  });
   $("#save2").onclick = async () => { await api("/api/settings/general", { method: "PATCH", body: formValues($("#gen")) }); toast("Saved"); };
   $("#save3").onclick = async () => { await api("/api/settings/editing", { method: "PATCH", body: formValues($("#edf")) }); toast("Saved"); };
   const stf = $("#stf");

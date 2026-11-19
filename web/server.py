@@ -99,6 +99,34 @@ class App:
                 "notify": {"telegram": self.notifier.telegram_ready(),
                            "webhooks": len(self.cfg["notify"].get("webhooks") or [])}}
 
+    def storage_view(self) -> dict:
+        """Free disk space and how fast recordings grow, for the retention estimate in Settings."""
+        d = Path(self.cfg["data_dir"])
+        d.mkdir(parents=True, exist_ok=True)
+        free = shutil.disk_usage(d).free
+        seg_root = d / "segments"
+        rec_bytes, rates, now = 0, [], time.time()
+        if seg_root.is_dir():
+            for sd in seg_root.iterdir():
+                if not sd.is_dir():
+                    continue
+                recent, n = 0, 0
+                for f in sd.iterdir():
+                    try:
+                        st = f.stat()
+                    except OSError:
+                        continue
+                    rec_bytes += st.st_size
+                    if now - st.st_mtime < 7200 and f.suffix == ".ts":
+                        recent += st.st_size
+                        n += 1
+                if n >= 30:                       # at least 5 minutes of 10 s segments
+                    rates.append(recent / (n * 10) * 3600)
+        streams = [s for s in self.cfg["streamers"] if s.get("enabled", True) and s.get("platform") != "demo"]
+        rates.sort()
+        return {"free_bytes": free, "recordings_bytes": rec_bytes, "streams": len(streams),
+                "gb_per_hour": round(rates[len(rates) // 2] / 1e9, 2) if rates else 3.5, "measured": bool(rates)}
+
     def settings_view(self) -> dict:
         c = self.cfg
         n = dict(c["notify"])
@@ -109,7 +137,7 @@ class App:
                 "server": dict(c["server"]), "clipper": dict(c["clipper"]), "detector": dict(c["detector"]),
                 "notify": n, "update": dict(c["update"]), "editing": dict(c["editing"]),
                 "sounds": dict(c["sounds"]), "style_job": dict(getattr(self, "style_job", {}) or {}),
-                "install_kind": install_kind()}
+                "install_kind": install_kind(), "storage": self.storage_view()}
 
 
 # ------------------------------------------------------------------ HTTP handler
@@ -467,8 +495,9 @@ def _clip_view(row):
     try:
         plan = json.loads(row.get("plan_json") or "{}")
         out.update(confidence=plan.get("confidence"), llm=plan.get("llm"), edits=plan.get("edits") or [], fact_check=plan.get("fact_check"),
-                   sfx_credits=plan.get("sfx_credits") or [],
-                   duration=round(float(plan.get("end", 0)) - float(plan.get("start", 0)), 1) if plan else None)
+                   sfx_credits=plan.get("sfx_credits") or [], edited=plan.get("edited"), edit_error=plan.get("edit_error"),
+                   duration=round(float(plan.get("end", 0)) - float(plan.get("start", 0))
+                                  - sum(b - a for a, b in plan.get("cuts") or []), 1) if plan else None)
     except Exception:  # noqa: BLE001
         pass
     out["has_video"] = bool(row.get("output_path")) and Path(row["output_path"]).exists()
@@ -509,7 +538,88 @@ def r_clip_action(h, cid, action):
     h.send_json({"ok": True})
 
 
-@route("GET", "/media/([^/]+)/(video|preview|source)", auth=False)
+@route("GET", "/api/clips/([^/]+)/editor")
+def r_clip_editor(h, cid):
+    """Everything the editor needs. Starts preparing the preview copy if it doesn't exist yet."""
+    from clipper import render as rendermod
+    from clipper import sfx
+    app = A(h)
+    row = app.db.get(cid)
+    if not row or not row.get("plan_json"):
+        return h.send_json({"error": "not found"}, 404)
+    cand = json.loads(row["candidate_json"])
+    plan = json.loads(row["plan_json"])
+    jobs = app.__dict__.setdefault("editor_jobs", {})
+    proxy = app.cfg["data_dir"] / "renders" / f"{cid}.editor.mp4"
+    if not proxy.exists() or "words" not in plan:
+        job = jobs.get(cid)
+        if not job or job["state"] == "error" and h.query.get("retry"):
+            job = jobs[cid] = {"state": "running", "msg": "starting"}
+
+            def run():
+                try:
+                    app.worker.prepare_editor(cid, job)
+                    job["state"] = "done"
+                except Exception as e:  # noqa: BLE001
+                    job.update(state="error", msg=str(e)[:300])
+                    log(f"[editor] prepare {cid} failed: {e}", "warn")
+            threading.Thread(target=run, daemon=True, name=f"editor-{cid}").start()
+        if job["state"] != "done":
+            return h.send_json({"ready": False, "job": job})
+        plan = json.loads(app.db.get(cid)["plan_json"])
+    try:
+        s = app.store.streamer(cand["streamer"])
+    except KeyError:
+        s = {"layout": "fit_blur"}
+    sw, sh, fps = rendermod.probe_full(cand["source_path"])
+    start = float(plan.get("start", 0))
+
+    def absolute(edits, base):
+        return [dict(e, t=round(float(e["t"]) + base, 3)) for e in edits or []]
+    ai = plan.get("ai")
+    if ai:
+        ai = {"start": ai.get("start"), "end": ai.get("end"), "hook_text": ai.get("hook_text", ""),
+              "edits": absolute(ai.get("edits"), float(ai.get("start") or 0))}
+    lib = sfx.library(app.cfg["data_dir"])
+    h.send_json({
+        "ready": True, "id": cid, "status": row["status"], "title": row.get("title"), "streamer": cand["streamer"],
+        "duration": float(cand.get("duration") or 0), "fps": fps, "peak": cand.get("peak_offset"),
+        "geometry": rendermod.editor_geometry(s, sw, sh),
+        "style": {k: s.get(k) for k in ("caption_color", "highlight_color", "callout_color", "hook", "sfx_volume")}
+                 | {"font": app.cfg["clipper"].get("font", "Sans")},
+        "plan": {"start": start, "end": float(plan.get("end", 0)), "hook_text": plan.get("hook_text", ""),
+                 "cuts": [[round(a + start, 3), round(b + start, 3)] for a, b in plan.get("cuts") or []],
+                 "edits": absolute(plan.get("edits"), start), "words": plan.get("words") or [],
+                 "captions_on": plan.get("captions_on", True)},
+        "ai": ai, "edited": plan.get("edited"),
+        "sfx": [{"name": k, "desc": v["desc"]} for k, v in sorted(lib.items())],
+        "proxy": f"/media/{cid}/editor?v={int(proxy.stat().st_mtime)}"})
+
+
+@route("POST", "/api/clips/([^/]+)/edit")
+def r_clip_edit(h, cid):
+    from clipper import plan as planmod
+    from clipper import sfx
+    app = A(h)
+    row = app.db.get(cid)
+    if not row:
+        return h.send_json({"error": "not found"}, 404)
+    if row["status"] == "processing":
+        return h.send_json({"error": "this clip is already being rendered"}, 409)
+    cand = json.loads(row["candidate_json"])
+    if not Path(cand["source_path"]).exists():
+        return h.send_json({"error": "the recording for this clip was deleted"}, 410)
+    try:
+        edit = planmod.user_edit(h.body(), float(cand.get("duration") or 0) or 1e9,
+                                 set(sfx.library(app.cfg["data_dir"])))
+    except (ValueError, TypeError) as e:
+        return h.send_json({"error": str(e)}, 400)
+    app.worker.submit_edit(cid, edit)
+    log(f"[editor] {cid}: rendering your edit ({len(edit['edits'])} effects, {len(edit['cuts'])} cuts)")
+    h.send_json({"ok": True})
+
+
+@route("GET", "/media/([^/]+)/(video|preview|source|editor)", auth=False)
 def r_media(h, cid, kind):
     tok = h.query.get("token", "")
     if not (h.authed() or (tok and hmac.compare_digest(tok, A(h).media_token(cid)))):
@@ -517,6 +627,9 @@ def r_media(h, cid, kind):
     row = A(h).db.get(cid)
     if not row:
         return h.send_json({"error": "not found"}, 404)
+    if kind == "editor":
+        p = A(h).cfg["data_dir"] / "renders" / f"{cid}.editor.mp4"
+        return h.send_file(p, "video/mp4", cache="private, max-age=86400")
     key = {"video": "output_path", "preview": "preview_path", "source": "source_path"}[kind]
     p = Path(row[key]) if row.get(key) else None
     h.send_file(p, "video/mp4" if kind != "source" else "video/x-matroska", cache="private, max-age=3600",
