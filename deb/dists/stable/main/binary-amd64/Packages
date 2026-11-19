@@ -1,22 +1,3 @@
-Package: gta-clipper
-Architecture: amd64
-Version: 0.3.1-1
-Priority: optional
-Section: video
-Maintainer: usingBlender <noreply@users.noreply.github.com>
-Installed-Size: 42415
-Depends: ca-certificates, ffmpeg
-Recommends: ffmpeg
-Filename: pool/main/gta-clipper_0.3.1-1_amd64.deb
-Size: 21472794
-MD5sum: 8c0357a1c2a3c7c51da933a4e9595c2c
-SHA1: 705b1ee792888e1cb7b2bd4764d14c944a842bfa
-SHA256: 3a7bcd0135c4dc3d658e063592d06db9da60e51047fe81ded43d26e5def488e7
-SHA512: 3a4c8b082000f82d5d9b7a082a218d8b0f8351d0b9a62569c8e5e2afa7caaa8f09bf1454c58d45a37377578854b5043c0b57ef5543a18bc61e9d7d935b9485e4
-Homepage: https://github.com/usingBlender/live-clipping-software
-Description: GTA Clipper watches livestreams, detects hype moments from chat and voice,
- and turns them into captioned vertical shorts you approve from a web dashboard.
-
 Package: live-clipper
 Architecture: amd64
 Version: 0.3.0-1
@@ -89,6 +70,25 @@ MD5sum: c845c7e3c04b055f401f7a2b17a5b5ef
 SHA1: 4ffddc4e327cad0e2d8b17ef01d5df1c33d6d5fe
 SHA256: e48baee93ea856a793dde979fa807fbef47c38272fbd1c5977e03ff9ef4a75e3
 SHA512: c35f75b81528a81b61cd29c232768037a30b5368fd21aa52353d4281923e766d69bfea1187d33c3c970425be2638dcdf9edc0d815e30967d1f2dc5fd978434f8
+Homepage: https://github.com/usingBlender/live-clipping-software
+Description: Live Clipper watches livestreams, detects hype moments from chat and voice,
+ and turns them into captioned vertical shorts you approve from a web dashboard.
+
+Package: live-clipper
+Architecture: amd64
+Version: 0.3.5-1
+Priority: optional
+Section: video
+Maintainer: usingBlender <noreply@users.noreply.github.com>
+Installed-Size: 43737
+Depends: ca-certificates, ffmpeg
+Recommends: ffmpeg
+Filename: pool/main/live-clipper_0.3.5-1_amd64.deb
+Size: 22816500
+MD5sum: e91e98d2b290ebd14686524b8424e9b5
+SHA1: 3400b6243aa3c0cd5cfd9c8410016711f5638318
+SHA256: 9f58062325f076ce606c839fcb52ec1fc0b09463d4168dee458731b9ef9320e1
+SHA512: 6bf60cee7b877d93112020739f3ebba260530f0818e0c015259c0f20a5281a121f8b8af801e7d85b58d113365b098059c0f9f4fe0b48f6b57e280196825d44c8
 Homepage: https://github.com/usingBlender/live-clipping-software
 Description: Live Clipper watches livestreams, detects hype moments from chat and voice,
  and turns them into captioned vertical shorts you approve from a web dashboard.
