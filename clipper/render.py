@@ -24,7 +24,10 @@ def _ffmpeg(cmd, what, cwd=None):
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd)
     if r.returncode != 0:
         tail = " ".join((r.stderr or "").strip().splitlines()[-2:])[:240]
-        raise RuntimeError(f"{what} failed: {tail or 'ffmpeg exit code ' + str(r.returncode)}")
+        code = r.returncode & 0xFFFFFFFF
+        crash = {0xC0000005: "FFmpeg crashed (access violation)", 0xC0000409: "FFmpeg crashed (stack buffer overrun)",
+                 0xC000001D: "FFmpeg crashed (illegal instruction)"}.get(code)
+        raise RuntimeError(f"{what} failed: {tail or crash or f'ffmpeg exit code {r.returncode}'}")
 
 
 def _even(x):
@@ -159,7 +162,20 @@ def _venc(encoder: str, preview=False) -> list[str]:
             "-bufsize", "4M" if preview else "16M"]
 
 
+def _attempts(encoder: str, fonts: bool):
+    """Render settings to try in order. If FFmpeg crashes or fails, the next safer variant is used:
+    GPU encoder -> CPU encoder, bundled caption font -> system fonts, and finally no captions."""
+    out = [(encoder, fonts, True)]
+    if encoder != "libx264":
+        out.append(("libx264", fonts, True))
+    if fonts:
+        out.append(("libx264", False, True))
+    out.append(("libx264", False, False))
+    return out
+
+
 def render(src: str, out: Path, streamer: dict, plan: dict, words: list, cfg: dict) -> tuple[Path, Path]:
+    from common.bus import log
     c = cfg["clipper"]
     start, end = float(plan["start"]), float(plan["end"])
     layout = streamer.get("layout", "cam_top")
@@ -168,16 +184,34 @@ def render(src: str, out: Path, streamer: dict, plan: dict, words: list, cfg: di
     ass_path.write_text(build_ass(words_in_window(words, start, end), plan.get("hook_text", ""),
                                   layout, c.get("font", "Sans"), end - start), encoding="utf-8")
     fonts = _stage_fonts(c, out.parent)
-    # relative names only: Windows drive letters ("C:") break filtergraph parsing
-    vf = layout_filter(streamer, sw, sh) + f";[base]ass=filename={ass_path.name}" + (":fontsdir=fonts" if fonts else "") + "[v]"
-    cmd = ["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", src,
-           "-filter_complex", vf, "-map", "[v]", "-map", "0:a:0",
-           "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "48000",
-           *_venc(c.get("encoder", "h264_nvenc")), "-pix_fmt", "yuv420p", "-fps_mode", "cfr",
-           "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
-    _ffmpeg(cmd, "Render", cwd=out.parent)
+    errors = []
+    used_enc = c.get("encoder", "h264_nvenc")
+    for enc, use_fonts, captions in _attempts(used_enc, fonts):
+        # relative names only: Windows drive letters ("C:") break filtergraph parsing
+        sub = f";[base]ass=filename={ass_path.name}" + (":fontsdir=fonts" if use_fonts else "") + "[v]"
+        vf = layout_filter(streamer, sw, sh) + (sub if captions else ";[base]null[v]")
+        cmd = ["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", src,
+               "-filter_complex", vf, "-map", "[v]", "-map", "0:a:0",
+               "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "48000",
+               *_venc(enc), "-pix_fmt", "yuv420p", "-fps_mode", "cfr",
+               "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
+        try:
+            _ffmpeg(cmd, "Render", cwd=out.parent)
+            used_enc = enc
+            if errors:
+                log(f"[render] worked with encoder={enc} bundled_font={use_fonts} captions={captions} "
+                    f"after: {' | '.join(errors)}", "warn")
+            break
+        except RuntimeError as e:
+            label = f"{enc}/font={use_fonts}/captions={captions}: {e}"
+            errors.append(label)
+            log(f"[render] attempt failed - {label}", "warn")
+            (out.parent / "last-failed-render.txt").write_text(
+                "cwd: " + str(out.parent) + "\n" + subprocess.list2cmdline(cmd) + "\n", encoding="utf-8")
+    else:
+        raise RuntimeError("Render failed in every mode: " + " | ".join(errors)[-400:])
     preview = out.with_name(out.stem + ".preview.mp4")
     _ffmpeg(["ffmpeg", "-v", "error", "-y", "-i", str(out), "-vf", "scale=540:-2",
-             *_venc(c.get("encoder", "h264_nvenc"), preview=True), "-pix_fmt", "yuv420p",
+             *_venc(used_enc, preview=True), "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(preview)], "Preview")
     return out, preview
