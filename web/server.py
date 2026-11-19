@@ -10,6 +10,7 @@ import os
 import queue
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -107,6 +108,7 @@ class App:
                             "config_path": str(self.store.path)},
                 "server": dict(c["server"]), "clipper": dict(c["clipper"]), "detector": dict(c["detector"]),
                 "notify": n, "update": dict(c["update"]), "editing": dict(c["editing"]),
+                "sounds": dict(c["sounds"]), "style_job": dict(getattr(self, "style_job", {}) or {}),
                 "install_kind": install_kind()}
 
 
@@ -464,7 +466,8 @@ def _clip_view(row):
                                "reason", "decided")}
     try:
         plan = json.loads(row.get("plan_json") or "{}")
-        out.update(confidence=plan.get("confidence"), llm=plan.get("llm"), edits=plan.get("edits") or [],
+        out.update(confidence=plan.get("confidence"), llm=plan.get("llm"), edits=plan.get("edits") or [], fact_check=plan.get("fact_check"),
+                   sfx_credits=plan.get("sfx_credits") or [],
                    duration=round(float(plan.get("end", 0)) - float(plan.get("start", 0)), 1) if plan else None)
     except Exception:  # noqa: BLE001
         pass
@@ -535,7 +538,8 @@ EDITABLE = {
     "notify": {"telegram_token", "telegram_chat_id", "telegram_preview", "telegram_final", "webhooks"},
     "update": {"repo", "auto_install", "check_hours"},
     "server": {"public_url"},
-    "editing": {"ai_sees_frames"},
+    "editing": {"ai_sees_frames", "verify_edits", "style_guide"},
+    "sounds": {"freesound_key", "allow_attribution"},
 }
 
 
@@ -571,6 +575,65 @@ def r_settings_patch(h, section):
     h.send_json({"ok": True, "settings": app.settings_view()})
 
 
+# ------------------------------------------------------------------ style learning
+def _style_uploads(app) -> Path:
+    d = app.cfg["data_dir"] / "style_uploads"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@route("GET", "/api/style")
+def r_style(h):
+    app = A(h)
+    h.send_json({"guide": app.cfg["editing"].get("style_guide", ""), "job": getattr(app, "style_job", None),
+                 "uploads": [p.name for p in sorted(_style_uploads(app).iterdir())
+                             if p.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm")]})
+
+
+@route("POST", "/api/style/upload")
+def r_style_upload(h):
+    n = int(h.headers.get("Content-Length") or 0)
+    if n <= 0 or n > 500_000_000:
+        return h.send_json({"error": "file missing or too big (max 500 MB)"}, 400)
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(unquote(h.query.get("filename", "ref.mp4"))).name)[:80]
+    if not name.lower().endswith((".mp4", ".mov", ".mkv", ".webm")):
+        return h.send_json({"error": "upload a video file (.mp4, .mov, .mkv, .webm)"}, 400)
+    (_style_uploads(A(h)) / name).write_bytes(h.rfile.read(n))
+    h.send_json({"ok": True})
+
+
+@route("DELETE", "/api/style/uploads")
+def r_style_clear(h):
+    shutil.rmtree(_style_uploads(A(h)), ignore_errors=True)
+    h.send_json({"ok": True})
+
+
+@route("POST", "/api/style/learn")
+def r_style_learn(h):
+    from clipper import style
+    app = A(h)
+    if (getattr(app, "style_job", None) or {}).get("state") == "running":
+        return h.send_json({"error": "already learning"}, 409)
+    urls = [u.strip() for u in (h.body().get("urls") or []) if str(u).strip().startswith(("http://", "https://"))][:10]
+    files = sorted(p for p in _style_uploads(app).iterdir() if p.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm"))
+    job = app.style_job = {"state": "running", "done": 0, "total": len(urls) + len(files), "msg": "starting"}
+
+    def run():
+        try:
+            guide = style.learn(app.cfg, urls, files, job)
+            with app.store.lock:
+                app.cfg["editing"]["style_guide"] = guide
+                app.store.save()
+            job["state"] = "done"
+            log("[style] learned a style guide from the references")
+            bus.publish("style.learned", {"chars": len(guide)})
+        except Exception as e:  # noqa: BLE001
+            job.update(state="error", msg=str(e)[:300])
+            log(f"[style] failed: {e}", "warn")
+    threading.Thread(target=run, daemon=True, name="style").start()
+    h.send_json({"ok": True})
+
+
 @route("POST", "/api/onboarding/complete")
 def r_onboarded(h):
     with A(h).store.lock:
@@ -585,8 +648,50 @@ def r_sfx(h):
     d = A(h).cfg["data_dir"]
     lib = sfx.library(d, include_disabled=True)
     h.send_json({"folder": str(d / "sfx"), "starter": sfx.starter_list(d), "sources": sfx.SOURCES,
+                 "packs": sfx.packs_view(d), "settings": dict(A(h).cfg["sounds"]),
                  "sounds": [{"name": k, "desc": v["desc"], "source": v["source"], "enabled": v["enabled"],
-                             "gain_db": v["gain_db"]} for k, v in lib.items()]})
+                             "gain_db": v["gain_db"], "license": v["license"], "credit": v["credit"],
+                             "page": v["page"]} for k, v in lib.items()]})
+
+
+@route("POST", "/api/sfx/packs/([a-z0-9\\-]+)/(install|remove)")
+def r_sfx_pack(h, pid, action):
+    from clipper import sfx
+    app = A(h)
+    if pid not in sfx.PACKS:
+        return h.send_json({"error": "unknown pack"}, 404)
+    if action == "remove":
+        sfx.uninstall_pack(app.cfg["data_dir"], pid)
+        log(f"[sfx] removed pack {pid}")
+        return h.send_json({"ok": True})
+    if (sfx.JOBS.get(pid) or {}).get("state") == "running":
+        return h.send_json({"ok": True, "running": True})
+    threading.Thread(target=sfx.install_pack, args=(app.cfg["data_dir"], pid, app.cfg["sounds"].get("freesound_key", "")),
+                     daemon=True, name=f"sfx-{pid}").start()
+    log(f"[sfx] installing pack {pid}")
+    h.send_json({"ok": True})
+
+
+@route("GET", "/api/sfx/search")
+def r_sfx_search(h):
+    from clipper import sfx
+    q = h.query.get("q", "").strip()[:80]
+    if not q:
+        return h.send_json({"results": [], "errors": []})
+    s = A(h).cfg["sounds"]
+    h.send_json(sfx.search(q, s.get("freesound_key", ""), bool(s.get("allow_attribution"))))
+
+
+@route("POST", "/api/sfx/add")
+def r_sfx_add(h):
+    from clipper import sfx
+    b = h.body()
+    try:
+        name = sfx.add_from_web(A(h).cfg["data_dir"], b.get("item") or {}, b.get("name", ""), b.get("desc", ""))
+    except Exception as e:  # noqa: BLE001
+        return h.send_json({"error": str(e)[:200]}, 400)
+    log(f"[sfx] added {name} from {(b.get('item') or {}).get('provider', 'web')}")
+    h.send_json({"ok": True, "name": name})
 
 
 @route("POST", "/api/sfx/upload")
@@ -617,8 +722,7 @@ def r_sfx_patch(h, name):
 def r_sfx_delete(h, name):
     from clipper import sfx
     ok = sfx.remove(A(h).cfg["data_dir"], name)
-    h.send_json({"ok": ok} if ok else {"error": "only your own sounds can be deleted - disable bundled ones"},
-                200 if ok else 400)
+    h.send_json({"ok": ok} if ok else {"error": "sound not found"}, 200 if ok else 400)
 
 
 @route("GET", "/media/sfx/([A-Za-z0-9_\\-]+)", auth=False)
@@ -669,8 +773,12 @@ def r_update_do(h, action):
     h.send_json(u.check() if action == "check" else u.install())
 
 
-@route("POST", "/api/quit")
+@route("POST", "/api/quit", auth=False)
 def r_quit(h):
+    """Logged-in UI, or `live-clipper --quit` on this machine (it reads the control token from the data folder)."""
+    tok = h.headers.get("X-Control-Token", "")
+    if not (h.authed() or (tok and hmac.compare_digest(tok, getattr(A(h), "control_token", "") or "-"))):
+        return h.send_json({"error": "login required"}, 401)
     h.send_json({"ok": True})
     threading.Timer(0.5, A(h).quit).start()
 
@@ -703,6 +811,13 @@ def serve(store: ConfigStore, open_browser=True):
     _lock = _lock_data_dir(store.cfg["data_dir"])  # noqa: F841
     app = App(store)
     Handler.app = app
+    app.control_token = secrets.token_urlsafe(24)
+    tok_file = store.cfg["data_dir"] / "control.token"
+    try:
+        tok_file.write_text(app.control_token, encoding="utf-8")
+        os.chmod(tok_file, 0o600)
+    except OSError:
+        pass
     host, port = store.cfg["server"]["host"], int(store.cfg["server"]["port"])
     httpd = None
     for _ in range(20):  # the previous instance may still be releasing the port after a restart

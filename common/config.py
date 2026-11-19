@@ -58,7 +58,12 @@ DEFAULTS = {
         "webhooks": [],                  # URLs that receive every event as JSON (e.g. n8n webhook)
     },
     "update": {"repo": "", "auto_install": False, "check_hours": 6},
-    "editing": {"ai_sees_frames": True},
+    "editing": {
+        "ai_sees_frames": True,          # Claude reads a grid of frames from the clip
+        "verify_edits": True,            # a second Claude pass removes any text/sound/title not backed by the clip
+        "style_guide": "",               # learned from reference videos (Settings -> Clips & AI -> Style)
+    },
+    "sounds": {"freesound_key": "", "allow_attribution": False},
     "streamers": [],
 }
 

@@ -116,6 +116,8 @@ class Worker:
         out = cfg["data_dir"] / "renders" / f"{cid}.mp4"
         words = caption_words(tr, s.get("captions", "streamer"), plan.get("streamer_segments"), lang)
         out, preview = rendermod.render(cand["source_path"], out, s, plan, words, cfg, lib)
+        used = {e.get("name") for e in plan.get("edits") or [] if e.get("type") == "sfx"}
+        plan["sfx_credits"] = sorted({lib[n]["credit"] for n in used if n in lib and lib[n].get("credit")})
         self.db.upsert(id=cid, status="pending", title=plan["title"], hashtags=" ".join(plan["hashtags"]),
                        hook=plan["hook_text"], reason=plan.get("reason", ""), output_path=str(out),
                        preview_path=str(preview), plan_json=plan)
@@ -138,6 +140,12 @@ class Worker:
         dst = ready / f"{cid}.mp4"
         shutil.copy2(row["output_path"], dst)
         caption = f"{row['title']}\n\n{row['hashtags']}"
+        try:
+            credits = json.loads(row.get("plan_json") or "{}").get("sfx_credits") or []
+        except Exception:  # noqa: BLE001
+            credits = []
+        if credits:
+            caption += "\n\nSounds: " + " · ".join(credits)
         (ready / f"{cid}.txt").write_text(caption, encoding="utf-8")
         base = self.base_url()
         local = f"http://127.0.0.1:{self.cfg['server']['port']}"

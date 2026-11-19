@@ -6,3 +6,8 @@ Exec=live-clipper
 Icon=live-clipper
 Terminal=false
 Categories=AudioVideo;Video;
+Actions=Quit;
+
+[Desktop Action Quit]
+Name=Quit Live Clipper
+Exec=live-clipper --quit

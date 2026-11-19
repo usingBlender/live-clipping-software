@@ -7,5 +7,7 @@ nvidia-cublas-cu12
 nvidia-cudnn-cu12==9.*
 streamlink>=7
 websockets>=12   # only for the experimental Kick chat reader
-pystray>=0.19       # tray icon (Open / Pause all / Quit)
+pystray>=0.19; sys_platform != "linux"       # tray icon (Open / Pause all / Quit)
 pillow>=10
+jeepney>=0.8; sys_platform == "linux"   # Linux tray icon (D-Bus)
+yt-dlp>=2025.1   # downloads reference videos for style learning

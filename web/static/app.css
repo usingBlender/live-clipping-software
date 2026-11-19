@@ -55,6 +55,7 @@ h1{font-size:24px}h2{font-size:19px}h3{font-size:16px}
 .pill.live{background:rgba(255,77,94,.15);color:var(--red)}
 .pill.connecting,.pill.offline{background:rgba(255,179,71,.12);color:var(--orange)}
 .pill.paused{background:var(--panel2);color:var(--dim)}
+.pill.warn{background:rgba(255,179,71,.12);color:var(--orange)}
 .pill.twitch{background:rgba(145,70,255,.18);color:#b794ff}.pill.kick{background:rgba(83,252,24,.12);color:#7dff4f}
 .pill.demo{background:rgba(45,226,200,.12);color:var(--teal)}
 .scard canvas{width:100%;height:120px;display:block;margin:10px 0 6px}

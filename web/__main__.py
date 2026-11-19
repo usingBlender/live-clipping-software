@@ -3,6 +3,7 @@
   python -m web                 run the app (opens the browser on first run)
   python -m web --supervise     keep it running: restart after crashes or self-updates
   python -m web --no-browser    don't open a browser window
+  python -m web --quit          close the running app
 If the app is already running, this just opens it in the browser.
 """
 import argparse
@@ -47,6 +48,7 @@ def main():
     ap.add_argument("--port", type=int)
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--supervise", action="store_true")
+    ap.add_argument("--quit", action="store_true", help="close the running app")
     a = ap.parse_args()
     if a.config:
         os.environ["LIVE_CLIPPER_CONFIG"] = a.config
@@ -58,6 +60,16 @@ def main():
     if a.port:
         store.cfg["server"]["port"] = a.port
     port = int(store.cfg["server"]["port"])
+    if a.quit:
+        try:
+            tok = (Path(store.cfg["data_dir"]) / "control.token").read_text(encoding="utf-8").strip()
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/api/quit", data=b"{}", method="POST",
+                                         headers={"X-Control-Token": tok, "Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=5).read()
+            print("Live Clipper is closing.")
+        except Exception as e:  # noqa: BLE001
+            print(f"Live Clipper doesn't seem to be running ({e}).")
+        return
     if already_running(port):
         if not a.no_browser:
             webbrowser.open(f"http://127.0.0.1:{port}")

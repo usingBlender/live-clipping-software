@@ -6,6 +6,7 @@ by frame number - never by seeking on container timestamps, which can be broken 
 """
 import json
 import re
+import unicodedata
 import shutil
 import subprocess
 from pathlib import Path
@@ -103,8 +104,11 @@ def _ts(t: float) -> str:
 
 
 def _clean(word: str) -> str:
-    w = re.sub(r"[{}\\]", "", word).strip()
-    return w.strip(",.;:").upper()
+    """Plain text for the subtitle file: no override/drawing codes, no emoji or symbol glyphs (libass draws
+    those as outlines from whatever fallback font it finds)."""
+    w = re.sub(r"\{[^}]*\}", "", str(word)).replace("\\", "").replace("{", "").replace("}", "")
+    w = "".join(ch for ch in w if unicodedata.category(ch)[0] in "LNZ" or ch in "!?.,'\"-%$#&:+/")
+    return re.sub(r"\s+", " ", w).strip().strip(",.;:").upper()
 
 
 def ass_color(hex_rgb: str, default="FFFFFF") -> str:

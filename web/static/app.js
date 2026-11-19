@@ -509,7 +509,7 @@ async function viewClip(v, id) {
         <span>length <b>${c.duration ? c.duration + "s" : "—"}</b></span><span>judge <b>${esc(c.llm || "—")}</b></span><span>${ago(c.created)}</span></div>
         ${c.hook ? `<p style="margin:10px 0 0"><span class="dim small">HOOK</span><br><b>${esc(c.hook)}</b></p>` : ""}
         ${c.reason ? `<p style="margin:10px 0 0"><span class="dim small">WHY THE AI PICKED IT</span><br>${esc(c.reason)}</p>` : ""}</div>
-      ${(c.edits || []).length ? `<div class="card" style="margin-bottom:12px"><h3>Edit</h3>${c.edits.map((e) => `<div class="chatline"><span class="dim">${num(e.t)}s</span> <b>${esc({ zoom: "Zoom", cam_focus: "Facecam takeover", text: "Callout", sfx: "Sound", shake: "Shake" }[e.type] || e.type)}</b> ${esc(e.text || e.name || (e.focus ? "on " + e.focus : ""))}${e.dur ? ` <span class="dim">(${num(e.dur)}s)</span>` : ""}</div>`).join("")}</div>` : ""}
+      ${(c.edits || []).length ? `<div class="card" style="margin-bottom:12px"><h3>Edit</h3>${c.edits.map((e) => `<div class="chatline"><span class="dim">${num(e.t)}s</span> <b>${esc({ zoom: "Zoom", cam_focus: "Facecam takeover", text: "Callout", sfx: "Sound", shake: "Shake" }[e.type] || e.type)}</b> ${esc(e.text || e.name || (e.focus ? "on " + e.focus : ""))}${e.dur ? ` <span class="dim">(${num(e.dur)}s)</span>` : ""}${e.why ? `<div class="dim small" style="margin-left:42px">based on ${esc(e.why)}</div>` : ""}</div>`).join("")}${c.fact_check && c.fact_check.removed.length ? `<div class="small muted" style="margin-top:6px">Fact-check removed: ${c.fact_check.removed.map(esc).join(" · ")}</div>` : ""}</div>` : ""}
       <div class="card"><h3>Chat at that moment</h3><div style="max-height:260px;overflow:auto">${chat}</div></div>
     </div></div>`;
   const caption = () => `${$("#ti").value}\n\n${$("#ht").value}`;
@@ -716,8 +716,16 @@ function setAI(el, s) {
     </div></div><button class="btn pri" id="save">Save</button></form>
     <form class="card" style="margin-top:14px" onsubmit="return false" id="edf"><h2>Editing</h2>
     ${switchField("ai_sees_frames", "Let the AI look at frames from each clip", s.editing.ai_sees_frames, "Claude sees what happens on screen, so zooms, callouts and sound effects land on the right moments. Uses a bit more of your Claude usage.")}
+    ${switchField("verify_edits", "Fact-check every edit (recommended)", s.editing.verify_edits, "A second, quick Claude pass removes any callout, sound effect, hook or title that isn't backed by what is said, written in chat or visible in the clip. Without Claude, only texts backed by the transcript/chat are kept.")}
     <p class="small muted">Intensity, zooms, callouts, sound effects and caption style are set per streamer: Streamers → Edit → Editing / Captions.</p>
     <button class="btn" id="save3">Save</button></form>
+    <div class="card" style="margin-top:14px"><h2>Style (learn from reference videos)</h2>
+    <p class="small muted">Paste links to shorts whose editing you like (YouTube, TikTok…) or upload the videos. The app downloads them, measures the pacing, and Claude studies frames from each one to write a style guide. The AI editor follows it for <b>how</b> to edit — it never takes content from the references.</p>
+    <div class="field"><label>Reference links (one per line)</label><textarea id="sturls" rows="4" placeholder="https://www.youtube.com/watch?v=..."></textarea></div>
+    <div class="row"><input type="file" id="stf" multiple accept="video/*" style="display:none"><button class="btn sm" id="stpick">Upload videos…</button><span id="stup" class="small muted"></span><span style="flex:1"></span><button class="btn pri" id="stgo">Learn style</button></div>
+    <div id="stjob" class="small" style="margin-top:8px"></div>
+    <div class="field" style="margin-top:10px"><label>Style guide (edit freely)</label><textarea id="stguide" rows="10"></textarea></div>
+    <div class="row"><button class="btn" id="stsave">Save guide</button><button class="btn sm bad" id="stclear">Clear</button></div></div>
     <div class="card" style="margin-top:14px"><h2>Sound effects</h2><p class="small muted">Manage and add sounds in <a href="#/settings/sounds">Settings → Sounds</a>.</p></div>
     <form class="card" style="margin-top:14px" onsubmit="return false" id="gen"><h2>Storage</h2>
     <p class="small muted">Recordings are kept in <span class="code">${esc(s.general.data_dir)}</span>. Settings file: <span class="code">${esc(s.general.config_path)}</span></p>
@@ -727,17 +735,60 @@ function setAI(el, s) {
   $$("#gen input[type=range]").forEach((r) => (r.oninput = () => (r.nextElementSibling.textContent = r.value)));
   $("#save2").onclick = async () => { await api("/api/settings/general", { method: "PATCH", body: formValues($("#gen")) }); toast("Saved"); };
   $("#save3").onclick = async () => { await api("/api/settings/editing", { method: "PATCH", body: formValues($("#edf")) }); toast("Saved"); };
+  const stf = $("#stf");
+  $("#stpick").onclick = () => stf.click();
+  stf.onchange = async () => {
+    for (const [i, f] of [...stf.files].entries()) {
+      $("#stup").textContent = `Uploading ${i + 1}/${stf.files.length}…`;
+      const r = await fetch(`/api/style/upload?filename=${encodeURIComponent(f.name)}`, { method: "POST", body: f, credentials: "same-origin", headers: { "Content-Type": "application/octet-stream" } });
+      if (!r.ok) toast(esc((await r.json().catch(() => ({}))).error || "upload failed"));
+    }
+    stf.value = ""; loadStyle();
+  };
+  $("#stgo").onclick = async () => {
+    try { await api("/api/style/learn", { method: "POST", body: { urls: $("#sturls").value.split(/\s+/).filter(Boolean) } }); loadStyle(); }
+    catch (e) { toast(esc(e.message)); }
+  };
+  const saveGuide = async (g) => { await api("/api/settings/editing", { method: "PATCH", body: { style_guide: g } }); toast("Saved"); };
+  $("#stsave").onclick = () => saveGuide($("#stguide").value);
+  $("#stclear").onclick = async () => { if (!confirm("Clear the style guide and uploaded references?")) return; await api("/api/style/uploads", { method: "DELETE" }); $("#stguide").value = ""; await saveGuide(""); loadStyle(); };
+  let stPoll = null;
+  async function loadStyle() {
+    const r = await api("/api/style");
+    $("#stup").textContent = r.uploads.length ? `${r.uploads.length} uploaded: ${r.uploads.join(", ")}` : "";
+    const j = r.job;
+    $("#stjob").innerHTML = !j ? "" : j.state === "running" ? `<span class="muted">Learning… ${j.done}/${j.total} · ${esc(j.msg)}</span>`
+      : j.state === "error" ? `<span style="color:var(--red)">${esc(j.msg)}</span>` : `<span style="color:var(--green)">Style learned.</span> <span class="muted">${esc(j.msg || "")}</span>`;
+    if (!j || j.state !== "running" || document.activeElement !== $("#stguide")) $("#stguide").value = r.guide || "";
+    clearTimeout(stPoll);
+    if (j && j.state === "running" && route().arg === "ai") stPoll = setTimeout(loadStyle, 2000);
+  }
+  loadStyle();
 
 }
 
 async function setSounds(el) {
-  el.innerHTML = `<div class="card"><h2>Add sounds</h2>
-    <p class="small muted">Upload sound files or a whole <b>.zip</b> pack (works from your phone too). Name a file after a sound in the list below — e.g. <span class="code">vine-boom.mp3</span> — and the AI knows exactly when to use it. Every sound is volume-matched automatically.</p>
-    <div class="row"><input type="file" id="sfxf" multiple accept="audio/*,.zip" style="display:none"><button class="btn pri" id="sfxpick">Upload sounds…</button><span id="sfxst" class="small muted"></span></div></div>
-    <div class="card" style="margin-top:14px"><h2>Most-used editing sounds</h2>
-    <p class="small muted">The sounds short-form editors use most. Download the ones you like from the links (Pixabay, Mixkit and Freesound's CC0 filter allow free use in monetized videos without credit — always check the license on the sound's page), then upload them here. Very famous meme clips may come from copyrighted recordings: when in doubt, use a royalty-free version.</p>
+  const LIC = { cc0: ["CC0", ""], by: ["CC-BY · credit", "warn"], "by-sa": ["CC-BY-SA · credit", "warn"], synth: ["generated", ""], yours: ["yours", "demo"], unknown: ["?", "warn"] };
+  const lic = (l) => { const [t, c] = LIC[l] || [l, ""]; return `<span class="pill ${c}">${esc(t)}</span>`; };
+  el.innerHTML = `<div class="card"><h2>Sound packs</h2>
+    <p class="small muted">Nothing is installed by default. Pick the packs you want — they download straight into the app. Only free sounds that need no credit are picked (CC0 / public domain).</p>
+    <div id="packs" class="dim small">Loading…</div></div>
+    <div class="card" style="margin-top:14px"><h2>Search sound libraries</h2>
+    <p class="small muted">Searches <b>Openverse</b> (Freesound + Wikimedia Commons) and, with a free API key, <b>Freesound</b> directly. Listen, then add with one click.</p>
+    <div class="row" style="flex-wrap:nowrap"><input type="text" id="sq" placeholder="e.g. vine boom, record scratch, car crash" style="flex:1"><button class="btn pri" id="sgo">Search</button></div>
+    <form id="sset" onsubmit="return false" style="margin-top:10px"><div class="two">
+      ${textField("freesound_key", "Freesound API key (optional)", "", `More and better results. Free: <a href="https://freesound.org/apiv2/apply" target="_blank" rel="noopener">freesound.org/apiv2/apply</a> → copy the "Client secret/Api key".`)}
+      ${switchField("allow_attribution", "Also show CC-BY sounds (need credit)", false, "Credits are added to the clip's caption automatically when such a sound is used.")}
+    </div><button class="btn sm" id="ssave">Save search settings</button></form>
+    <div id="sres" style="margin-top:10px"></div></div>
+    <div class="card" style="margin-top:14px"><h2>Classic editing sounds</h2>
+    <p class="small muted">The sounds short-form editors use most. <b>Find</b> searches the libraries above; the <b>Classic YouTube sounds</b> pack gets all of them at once.</p>
     <div id="starter" class="dim small">Loading…</div></div>
-    <div class="card" style="margin-top:14px"><h2>Your library</h2><p class="small muted">Only enabled sounds are offered to the AI. Edit the description to tell it when to use a sound.</p><div id="lib" class="dim small">Loading…</div></div>`;
+    <div class="card" style="margin-top:14px"><h2>Other libraries & your own files</h2>
+    <p class="small muted">These sites have no download API: get the sounds in your browser, then upload the files or a whole <b>.zip</b> here (works from your phone too). Name a file after a classic sound — e.g. <span class="code">vine-boom.mp3</span> — and the AI knows when to use it.</p>
+    <div id="srcs" class="small"></div>
+    <div class="row" style="margin-top:10px"><input type="file" id="sfxf" multiple accept="audio/*,.zip" style="display:none"><button class="btn" id="sfxpick">Upload sounds…</button><span id="sfxst" class="small muted"></span></div></div>
+    <div class="card" style="margin-top:14px"><h2>Your library</h2><p class="small muted">Only enabled sounds are offered to the AI. Edit the description to tell it when to use a sound. With no sounds, clips get no sound effects.</p><div id="lib" class="dim small">Loading…</div></div>`;
   const pick = $("#sfxf");
   $("#sfxpick").onclick = () => pick.click();
   pick.onchange = async () => {
@@ -750,25 +801,69 @@ async function setSounds(el) {
     }
     $("#sfxst").textContent = `Added ${added} sound(s).`; pick.value = ""; load();
   };
+  let audio = null;
+  const play = (url) => { if (audio) audio.pause(); audio = new Audio(url); audio.play().catch(() => toast("Couldn't play this preview")); };
+  let addName = "";
+  async function search(q, name = "") {
+    if (!q) return;
+    addName = name; $("#sq").value = q;
+    $("#sres").innerHTML = `<div class="dim small">Searching…</div>`;
+    const r = await api(`/api/sfx/search?q=${encodeURIComponent(q)}`).catch((e) => ({ results: [], errors: [e.message] }));
+    const res = r.results || [];
+    $("#sres").innerHTML = (r.errors || []).map((e) => `<div class="small" style="color:var(--orange)">${esc(e)}</div>`).join("") +
+      (res.length ? res.map((x, i) => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:nowrap">
+        <button class="btn sm" data-pv="${i}" title="Listen">▶</button>
+        <div style="flex:1;min-width:0"><div class="small" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><b>${esc(x.title)}</b></div>
+        <div class="small muted">${esc(x.provider)} · ${esc(x.creator || "?")} · ${num(x.duration)}s ${lic(x.license)} ${x.page ? `· <a href="${esc(x.page)}" target="_blank" rel="noopener">page</a>` : ""}</div></div>
+        <button class="btn sm pri" data-add="${i}">Add${addName ? ` as ${esc(addName)}` : ""}</button></div>`).join("") : `<div class="dim small">No results. Try other words (English works best).</div>`);
+    $$("[data-pv]").forEach((b) => (b.onclick = () => play(res[+b.dataset.pv].preview)));
+    $$("[data-add]").forEach((b) => (b.onclick = async () => {
+      b.disabled = true; b.textContent = "Adding…";
+      try { const j = await api("/api/sfx/add", { method: "POST", body: { item: res[+b.dataset.add], name: addName } }); b.textContent = `Added ✓ ${j.name}`; load(); }
+      catch (e) { b.disabled = false; b.textContent = "Add"; toast(esc(e.message)); }
+    }));
+  }
+  $("#sgo").onclick = () => search($("#sq").value.trim());
+  $("#sq").onkeydown = (e) => { if (e.key === "Enter") search($("#sq").value.trim()); };
+  $("#ssave").onclick = async () => { await api("/api/settings/sounds", { method: "PATCH", body: formValues($("#sset")) }); toast("Saved"); };
+  let poll = null;
   async function load() {
     const r = await api("/api/sfx");
+    const ss = r.settings || {};
+    $("#sset [name=freesound_key]").value = ss.freesound_key || "";
+    $("#sset [name=allow_attribution]").checked = !!ss.allow_attribution;
+    $("#packs").className = "";
+    $("#packs").innerHTML = r.packs.map((p) => {
+      const j = p.job, run = j && j.state === "running";
+      const st = run ? `<span class="small muted">${j.total ? `${j.done}/${j.total}` : ""} ${esc(j.msg || "installing…")}</span>`
+        : j && j.state === "error" ? `<span class="small" style="color:var(--red)">${esc(j.msg)}</span>`
+        : j && j.msg ? `<span class="small" style="color:var(--orange)">${esc(j.msg)}</span>` : "";
+      return `<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:nowrap">
+        <div style="flex:1;min-width:0"><div class="row" style="gap:6px"><b>${esc(p.name)}</b><span class="pill">${esc(p.license)}</span>${p.installed ? `<span class="pill demo">${p.count} sounds</span>` : ""}</div>
+        <div class="small muted">${esc(p.desc)}</div>${st}</div>
+        ${run ? "" : p.installed ? `<button class="btn sm" data-pi="${p.id}">Update</button><button class="btn sm bad" data-pr="${p.id}">Remove</button>` : `<button class="btn sm pri" data-pi="${p.id}">Install</button>`}</div>`;
+    }).join("");
+    $$("[data-pi]").forEach((b) => (b.onclick = async () => { await api(`/api/sfx/packs/${b.dataset.pi}/install`, { method: "POST" }); load(); }));
+    $$("[data-pr]").forEach((b) => (b.onclick = async () => { if (!confirm("Remove this pack's sounds?")) return; await api(`/api/sfx/packs/${b.dataset.pr}/remove`, { method: "POST" }); load(); }));
+    clearTimeout(poll);
+    if (r.packs.some((p) => p.job && p.job.state === "running") && route().arg === "sounds") poll = setTimeout(load, 1500);
     $("#starter").className = "";
-    $("#starter").innerHTML = `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px">${r.starter.map((x) => `
+    $("#starter").innerHTML = `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px">${r.starter.map((x) => `
       <div style="border:1px solid var(--line);border-radius:10px;padding:8px 10px">
         <div class="row" style="gap:6px"><span class="st" style="color:${x.have ? "var(--green)" : "var(--dim)"}">${x.have ? "✓" : "○"}</span><b class="mono" style="font-size:13px">${esc(x.name)}</b></div>
         <div class="small muted" style="margin:3px 0 5px">${esc(x.use)}</div>
-        <div class="small"><a href="${x.pixabay}" target="_blank" rel="noopener">Search Pixabay</a> · <a href="${x.freesound}" target="_blank" rel="noopener">Search Freesound CC0</a></div></div>`).join("")}</div>
-      <h3 style="margin-top:16px">Whole libraries and packs</h3>${r.sources.map((x) => `<div class="small" style="padding:3px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener"><b>${esc(x.name)}</b></a> <span class="muted">— ${esc(x.note)}</span></div>`).join("")}`;
+        <div class="small"><a href="#" data-find="${esc(x.name)}" data-q="${esc(x.query)}">Find</a> · <a href="${x.pixabay}" target="_blank" rel="noopener">Pixabay</a></div></div>`).join("")}</div>`;
+    $$("[data-find]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); search(a.dataset.q, a.dataset.find); $("#sq").scrollIntoView({ behavior: "smooth", block: "center" }); }));
+    $("#srcs").innerHTML = r.sources.map((x) => `<div style="padding:3px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener"><b>${esc(x.name)}</b></a> <span class="muted">— ${esc(x.note)}</span></div>`).join("");
     $("#lib").className = "";
-    const order = { yours: 0, "bundled (Kenney, CC0)": 1, synth: 2 };
-    $("#lib").innerHTML = r.sounds.sort((a, b) => (order[a.source] ?? 3) - (order[b.source] ?? 3) || a.name.localeCompare(b.name)).map((x) => `
+    $("#lib").innerHTML = r.sounds.length ? r.sounds.sort((a, b) => (a.source === "yours" ? 0 : 1) - (b.source === "yours" ? 0 : 1) || a.source.localeCompare(b.source) || a.name.localeCompare(b.name)).map((x) => `
       <div class="row" style="padding:7px 0;border-bottom:1px solid var(--line);flex-wrap:nowrap">
         <button class="btn sm" data-play="${esc(x.name)}" title="Play">▶</button>
-        <div style="flex:1;min-width:0"><div class="row" style="gap:6px"><b class="mono" style="font-size:13px">${esc(x.name)}</b><span class="pill ${x.source === "yours" ? "demo" : ""}">${esc(x.source === "synth" ? "basic" : x.source === "yours" ? "yours" : "bundled")}</span></div>
+        <div style="flex:1;min-width:0"><div class="row" style="gap:6px"><b class="mono" style="font-size:13px">${esc(x.name)}</b>${x.source === "yours" ? "" : `<span class="small muted">${esc(x.source)}</span>`}${lic(x.license)}${x.page ? `<a class="small" href="${esc(x.page)}" target="_blank" rel="noopener">source</a>` : ""}</div>
           <input type="text" data-desc="${esc(x.name)}" value="${esc(x.desc)}" style="margin-top:4px;padding:6px 8px;font-size:13px"></div>
         <label class="switch" title="Offer to the AI"><input type="checkbox" data-en="${esc(x.name)}" ${x.enabled ? "checked" : ""}><span></span></label>
-        ${x.source === "yours" ? `<button class="btn sm bad" data-del="${esc(x.name)}" title="Delete">✕</button>` : ""}</div>`).join("");
-    $$("[data-play]").forEach((b) => (b.onclick = () => new Audio(`/media/sfx/${encodeURIComponent(b.dataset.play)}`).play()));
+        <button class="btn sm bad" data-del="${esc(x.name)}" title="Delete">✕</button></div>`).join("") : `<div class="dim small">No sounds yet — install a pack or search above.</div>`;
+    $$("[data-play]").forEach((b) => (b.onclick = () => play(`/media/sfx/${encodeURIComponent(b.dataset.play)}`)));
     $$("[data-desc]").forEach((i) => (i.onchange = async () => { await api(`/api/sfx/${encodeURIComponent(i.dataset.desc)}`, { method: "PATCH", body: { desc: i.value } }); toast("Description saved"); }));
     $$("[data-en]").forEach((c) => (c.onchange = () => api(`/api/sfx/${encodeURIComponent(c.dataset.en)}`, { method: "PATCH", body: { enabled: c.checked } })));
     $$("#lib [data-del]").forEach((b) => (b.onclick = async () => { if (!confirm(`Delete ${b.dataset.del}?`)) return; await api(`/api/sfx/${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" }); load(); }));
