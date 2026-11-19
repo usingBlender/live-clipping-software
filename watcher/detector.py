@@ -112,3 +112,34 @@ class Detector:
             for k in [k for k in d if k < cut]:
                 del d[k]
         self.supp = {s for s in self.supp if s >= cut}
+
+
+class StreamerDetectorSettings:
+    """Detection settings for one streamer: the global values with that streamer's overrides on top.
+    Read live on every access, so edits in the UI apply immediately."""
+
+    def __init__(self, global_dc: dict, streamer_fn):
+        self.g, self.s = global_dc, streamer_fn
+
+    def _streamer(self):
+        try:
+            return self.s() or {}
+        except KeyError:
+            return {}
+
+    def __getitem__(self, k):
+        s = self._streamer()
+        if k == "threshold":
+            sens = float(s.get("sensitivity") or 1.0)
+            return float(self.g["threshold"]) / max(0.2, sens)
+        if k in ("cooldown_s", "chat_offset_s") and s.get(k) not in (None, ""):
+            return s[k]
+        if k == "keywords":
+            return list(self.g["keywords"]) + [str(x).lower() for x in s.get("keywords_extra") or []]
+        return self.g[k]
+
+    def get(self, k, default=None):
+        try:
+            return self[k]
+        except KeyError:
+            return default

@@ -8,7 +8,8 @@ from pathlib import Path
 
 from clipper import plan as planmod
 from clipper import render as rendermod
-from clipper.transcribe import transcribe
+from clipper import sfx as sfxmod
+from clipper.transcribe import caption_words, transcribe
 from common.bus import bus, log
 
 
@@ -86,11 +87,26 @@ class Worker:
         if not Path(cand["source_path"]).exists():
             raise FileNotFoundError("source file missing")
         t0 = time.time()
+        try:
+            s = self.store.streamer(cand["streamer"])
+        except KeyError:
+            s = {"layout": "fit_blur"}
+        lang = s.get("language") or cfg["clipper"].get("language", "pt")
         self.db.upsert(id=cid, status="processing")
         self._stage(cid, "transcribing")
-        tr = transcribe(cfg, cand["source_path"])
+        tr = transcribe(cfg, cand["source_path"], lang)
         self._stage(cid, "judging")
-        plan = planmod.make_plan(cand, tr, cfg)
+        lib = sfxmod.library(cfg["data_dir"])
+        frames = None
+        if cfg.get("editing", {}).get("ai_sees_frames", True) and not cand.get("demo"):
+            try:
+                grid = cfg["data_dir"] / "renders" / f"{cid}.frames.jpg"
+                lo = max(0.0, cand["peak_offset"] - 20)
+                hi = min(cand["duration"], cand["peak_offset"] + 15)
+                frames = (grid, rendermod.frame_grid(cand["source_path"], grid, lo, hi))
+            except Exception as e:  # noqa: BLE001
+                log(f"[clip] frame grid failed: {e}", "warn")
+        plan = planmod.make_plan(cand, tr, cfg, s, lib, frames)
         if not plan.get("keep", True):
             self.db.upsert(id=cid, status="skipped", reason=plan.get("reason", ""), plan_json=plan)
             log(f"[clip] {cid} skipped: {plan.get('reason', '')}")
@@ -98,11 +114,8 @@ class Worker:
             return {"status": "skipped", "clip_id": cid, "reason": plan.get("reason", "")}
         self._stage(cid, "rendering")
         out = cfg["data_dir"] / "renders" / f"{cid}.mp4"
-        try:
-            s = self.store.streamer(cand["streamer"])
-        except KeyError:
-            s = {"layout": "fit_blur"}
-        out, preview = rendermod.render(cand["source_path"], out, s, plan, tr["words"], cfg)
+        words = caption_words(tr, s.get("captions", "streamer"), plan.get("streamer_segments"), lang)
+        out, preview = rendermod.render(cand["source_path"], out, s, plan, words, cfg, lib)
         self.db.upsert(id=cid, status="pending", title=plan["title"], hashtags=" ".join(plan["hashtags"]),
                        hook=plan["hook_text"], reason=plan.get("reason", ""), output_path=str(out),
                        preview_path=str(preview), plan_json=plan)
@@ -110,9 +123,10 @@ class Worker:
         res = {"status": "rendered", "clip_id": cid, "streamer": cand["streamer"], "title": plan["title"],
                "hashtags": plan["hashtags"], "hook": plan["hook_text"], "reason": plan.get("reason", ""),
                "confidence": plan.get("confidence"), "score": cand.get("score"), "llm": plan.get("llm"),
+               "edits": len(plan.get("edits") or []),
                "seconds": round(time.time() - t0, 1), "review_url": f"{base}/#/clips/{cid}",
                "video_url": f"{base}/media/{cid}/video", "preview_url": f"{base}/media/{cid}/preview"}
-        log(f"[clip] {cid} ready in {res['seconds']}s ({plan.get('llm')})")
+        log(f"[clip] {cid} ready in {res['seconds']}s ({plan.get('llm')}, {res['edits']} effects)")
         bus.publish("clip.rendered", res)
         self.notifier.event("clip.rendered", res, {"preview": str(preview)})
         return res

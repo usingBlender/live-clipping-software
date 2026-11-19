@@ -67,6 +67,7 @@ class App:
         self.worker = Worker(store, self.db, self.notifier, self.public_url, self.media_token)
         self.manager = WatcherManager(store, self.worker.submit)
         self.updater = Updater(store, lambda: self.worker.current is None and self.worker.q.empty(), self.notifier)
+        self.quit = lambda: (self.manager.shutdown(), os._exit(0))  # replaced by serve()
 
     @property
     def cfg(self):
@@ -105,7 +106,8 @@ class App:
         return {"general": {"data_dir": str(c["data_dir"]), "retention_hours": c["retention_hours"],
                             "config_path": str(self.store.path)},
                 "server": dict(c["server"]), "clipper": dict(c["clipper"]), "detector": dict(c["detector"]),
-                "notify": n, "update": dict(c["update"]), "install_kind": install_kind()}
+                "notify": n, "update": dict(c["update"]), "editing": dict(c["editing"]),
+                "install_kind": install_kind()}
 
 
 # ------------------------------------------------------------------ HTTP handler
@@ -343,9 +345,11 @@ def r_logs(h):
 
 
 # ------------------------------------------------------------------ streamers (hot-swap)
-STREAMER_FIELDS = {"platform", "channel", "kick_chatroom_id", "quality", "streamlink_args", "layout", "cam",
-                   "game_center_x", "game_zoom", "enabled"}
-RESTART_FIELDS = {"platform", "channel", "kick_chatroom_id", "quality", "streamlink_args"}
+from common.config import STREAMER_DEFAULTS  # noqa: E402
+
+STREAMER_FIELDS = set(STREAMER_DEFAULTS) | {"channel", "kick_chatroom_id"}
+RESTART_FIELDS = {"platform", "channel", "kick_chatroom_id", "quality", "streamlink_args", "chat_offset_s"}
+LIST_FIELDS = {"hashtags", "keywords_extra", "streamlink_args"}
 
 
 @route("GET", "/api/streamers")
@@ -378,6 +382,12 @@ def r_add_streamer(h):
 def r_edit_streamer(h, name):
     b = h.body()
     app = A(h)
+    for k in LIST_FIELDS & set(b):
+        if isinstance(b[k], str):
+            b[k] = [x.strip() for x in re.split(r"[,\n]", b[k]) if x.strip()]
+    for k in ("cooldown_s", "chat_offset_s"):
+        if k in b:
+            b[k] = None if b[k] in ("", None) else float(b[k])
     with app.store.lock:
         s = app.store.streamer(name)
         changed = {k for k, v in b.items() if k in STREAMER_FIELDS and s.get(k) != v}
@@ -454,7 +464,7 @@ def _clip_view(row):
                                "reason", "decided")}
     try:
         plan = json.loads(row.get("plan_json") or "{}")
-        out.update(confidence=plan.get("confidence"), llm=plan.get("llm"),
+        out.update(confidence=plan.get("confidence"), llm=plan.get("llm"), edits=plan.get("edits") or [],
                    duration=round(float(plan.get("end", 0)) - float(plan.get("start", 0)), 1) if plan else None)
     except Exception:  # noqa: BLE001
         pass
@@ -525,6 +535,7 @@ EDITABLE = {
     "notify": {"telegram_token", "telegram_chat_id", "telegram_preview", "telegram_final", "webhooks"},
     "update": {"repo", "auto_install", "check_hours"},
     "server": {"public_url"},
+    "editing": {"ai_sees_frames"},
 }
 
 
@@ -568,6 +579,58 @@ def r_onboarded(h):
     h.send_json({"ok": True})
 
 
+@route("GET", "/api/sfx")
+def r_sfx(h):
+    from clipper import sfx
+    d = A(h).cfg["data_dir"]
+    lib = sfx.library(d, include_disabled=True)
+    h.send_json({"folder": str(d / "sfx"), "starter": sfx.starter_list(d), "sources": sfx.SOURCES,
+                 "sounds": [{"name": k, "desc": v["desc"], "source": v["source"], "enabled": v["enabled"],
+                             "gain_db": v["gain_db"]} for k, v in lib.items()]})
+
+
+@route("POST", "/api/sfx/upload")
+def r_sfx_upload(h):
+    from clipper import sfx
+    n = int(h.headers.get("Content-Length") or 0)
+    if n <= 0 or n > 200_000_000:
+        return h.send_json({"error": "file missing or too big (max 200 MB)"}, 400)
+    name = unquote(h.query.get("filename", "sound.wav"))
+    try:
+        added = sfx.import_file(A(h).cfg["data_dir"], name, h.rfile.read(n))
+    except (ValueError, OSError) as e:
+        return h.send_json({"error": str(e)}, 400)
+    log(f"[sfx] imported {len(added)} sound(s) from {name}")
+    h.send_json({"ok": True, "added": added})
+
+
+@route("PATCH", "/api/sfx/([a-z0-9_\\-]+)")
+def r_sfx_patch(h, name):
+    from clipper import sfx
+    b = h.body()
+    sfx.update_meta(A(h).cfg["data_dir"], name, desc=(b.get("desc") or None) if "desc" in b else None,
+                    enabled=b.get("enabled"))
+    h.send_json({"ok": True})
+
+
+@route("DELETE", "/api/sfx/([a-z0-9_\\-]+)")
+def r_sfx_delete(h, name):
+    from clipper import sfx
+    ok = sfx.remove(A(h).cfg["data_dir"], name)
+    h.send_json({"ok": ok} if ok else {"error": "only your own sounds can be deleted - disable bundled ones"},
+                200 if ok else 400)
+
+
+@route("GET", "/media/sfx/([A-Za-z0-9_\\-]+)", auth=False)
+def r_sfx_file(h, name):
+    if not h.authed():
+        return h.send_json({"error": "login required"}, 401)
+    from clipper import sfx
+    lib = sfx.library(A(h).cfg["data_dir"], include_disabled=True)
+    p = lib.get(name.lower(), {}).get("path")
+    h.send_file(p, cache="private, max-age=3600")
+
+
 @route("GET", "/api/system/check")
 def r_check(h):
     h.send_json({"items": system.check(A(h).cfg)})
@@ -604,6 +667,12 @@ def r_update(h):
 def r_update_do(h, action):
     u = A(h).updater
     h.send_json(u.check() if action == "check" else u.install())
+
+
+@route("POST", "/api/quit")
+def r_quit(h):
+    h.send_json({"ok": True})
+    threading.Timer(0.5, A(h).quit).start()
 
 
 @route("POST", "/api/restart")
@@ -651,6 +720,27 @@ def serve(store: ConfigStore, open_browser=True):
     app.worker.requeue_unfinished()
     if open_browser and not store.cfg["onboarded"]:
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+
+    def quit_app():
+        log("quitting (asked by the user)")
+        app.manager.shutdown()
+        try:
+            httpd.server_close()
+        finally:
+            os._exit(0)  # exit code 0 = "don't restart" for the supervisor and systemd
+    app.quit = quit_app
+
+    from web.tray import run_tray, tray_possible
+    if tray_possible():
+        # the tray needs the main thread; the web server runs beside it
+        threading.Thread(target=httpd.serve_forever, name="http", daemon=True).start()
+        try:
+            if run_tray(app, url, quit_app):
+                quit_app()  # tray loop ended
+            while True:  # no tray available: keep running until Quit / Ctrl+C
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            quit_app()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

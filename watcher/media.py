@@ -40,7 +40,8 @@ def recorder_commands(s: dict, seg_dir: Path) -> tuple[list | None, list]:
     """Returns (source_cmd or None, ffmpeg_cmd). The source pipes MPEG-TS into ffmpeg's stdin.
     platform 'demo' needs no internet: ffmpeg generates a test picture + audio with periodic
     loud bursts, so you can watch the whole pipeline work without a live stream."""
-    seg = ["-f", "segment", "-segment_time", "10", "-reset_timestamps", "1", "-strftime", "1",
+    # Timestamps continue across pieces (no reset), so joined pieces stay in order.
+    seg = ["-f", "segment", "-segment_time", "10", "-strftime", "1",
            (seg_dir / "%Y%m%d-%H%M%S.ts").as_posix()]
     if s["platform"] == "demo":
         voice = (f"0.05*sin(2*PI*180*t)*(0.6+0.4*sin(2*PI*2*t))"
@@ -94,7 +95,12 @@ def analyze_segment(path: Path) -> tuple[int, int, dict]:
 
 
 def cut_window(seg_dir: Path, t0: int, t1: int, out: Path) -> tuple[int, float]:
-    """Stream-copy the segments overlapping [t0, t1] into one file.
+    """Join the 10 s pieces overlapping [t0, t1] into one MPEG-TS file by appending their bytes.
+
+    MPEG-TS is designed to be joined like this, and it keeps frames in exactly the order they were
+    recorded. (The old method - FFmpeg's concat demuxer + stream copy - trusted each piece's internal
+    clock, and broken clocks from ad breaks/reconnects showed up as flashes of later frames and
+    jumps back in time.) The renderer then renumbers frames in arrival order.
     Returns (file_start_epoch, duration_s)."""
     segs = list_segments(seg_dir)
     starts = [seg_start(p) for p in segs]
@@ -105,14 +111,13 @@ def cut_window(seg_dir: Path, t0: int, t1: int, out: Path) -> tuple[int, float]:
             chosen.append((p, st))
     if not chosen:
         raise RuntimeError("no segments for window")
-    lst = out.with_suffix(".txt")
-    lst.write_text("".join(f"file '{p.as_posix()}'\n" for p, _ in chosen), encoding="utf-8")
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst),
-                    "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", str(out)], check=True)
-    lst.unlink(missing_ok=True)
-    dur = float(subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out)],
-        capture_output=True, text=True).stdout.strip() or 0)
+    out = out.with_suffix(".ts")
+    with open(out, "wb") as o:
+        for p, _ in chosen:
+            with open(p, "rb") as f:
+                while chunk := f.read(4 << 20):
+                    o.write(chunk)
+    dur = len(_decode_audio(out)) / SR  # true length in arrival order (container duration can lie)
     return chosen[0][1], dur
 
 

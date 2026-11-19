@@ -58,18 +58,44 @@ DEFAULTS = {
         "webhooks": [],                  # URLs that receive every event as JSON (e.g. n8n webhook)
     },
     "update": {"repo": "", "auto_install": False, "check_hours": 6},
+    "editing": {"ai_sees_frames": True},
     "streamers": [],
 }
 
 STREAMER_DEFAULTS = {
+    # source
     "platform": "twitch",
     "enabled": True,
+    "display_name": "",            # name used in titles (default: channel)
     "quality": "1080p60,1080p,best",
     "streamlink_args": [],
+    # look
     "layout": "cam_top",
     "cam": {"x": 0.0, "y": 0.0, "w": 0.25, "h": 0.25},
+    "cam_height": 0.40,            # share of the vertical frame used by the facecam (cam_top)
     "game_center_x": 0.5,
     "game_zoom": 1.0,
+    "language": "",                # "" = app default
+    "captions": "streamer",        # streamer | all | off
+    "caption_y": 0.69,             # vertical position of captions (share of height)
+    "caption_color": "#FFFFFF",
+    "highlight_color": "#FFE500",
+    "callout_color": "#E8173F",
+    "hook": True,
+    # editing
+    "edit_intensity": "normal",    # off | light | normal | heavy
+    "edit_zoom": True,
+    "edit_cam_focus": True,
+    "edit_text": True,
+    "edit_sfx": True,
+    "edit_shake": True,
+    "sfx_volume": 0.8,
+    "hashtags": [],
+    # detection (empty = use the global setting)
+    "sensitivity": 1.0,            # >1 = more clips (lower threshold), <1 = fewer
+    "cooldown_s": None,
+    "chat_offset_s": None,
+    "keywords_extra": [],
 }
 
 

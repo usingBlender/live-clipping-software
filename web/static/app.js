@@ -403,7 +403,7 @@ function updateCardStats(s) {
   const pill = $("#sp-" + id); if (!pill) return;
   pill.className = "pill " + s.state; pill.textContent = s.state;
   $("#sd-" + id).className = "dot " + (s.state === "live" ? "live" : s.state === "paused" ? "off" : "warn");
-  const thr = S.ov.threshold || 3.5;
+  const thr = s.threshold || S.ov.threshold || 3.5;
   $("#sm-" + id).style.width = `${Math.max(0, Math.min(100, ((s.score || 0) / (thr * 2)) * 100))}%`;
   const parts = [];
   if (s.state === "live") parts.push(`<span>live for <b>${ago(s.live_since).replace(" ago", "")}</b></span>`);
@@ -444,7 +444,7 @@ function drawChart(name) {
   g.strokeStyle = "rgba(255,255,255,.05)"; g.lineWidth = 1;
   for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(0, (H * i) / 4); g.lineTo(W, (H * i) / 4); g.stroke(); }
   if (!vis.length) { g.fillStyle = "#6c6480"; g.font = "12px Inter,system-ui"; g.fillText("waiting for data…", 10, H / 2); return; }
-  const thr = S.ov?.threshold || 3.5;
+  const thr = S.ov?.streamers.find((x) => x.name === name)?.threshold || S.ov?.threshold || 3.5;
   const maxS = Math.max(thr * 1.6, ...vis.map((p) => p.score));
   const minS = Math.min(-1, ...vis.map((p) => p.score));
   const y = (v) => H - 4 - ((v - minS) / (maxS - minS)) * (H - 8);
@@ -509,6 +509,7 @@ async function viewClip(v, id) {
         <span>length <b>${c.duration ? c.duration + "s" : "—"}</b></span><span>judge <b>${esc(c.llm || "—")}</b></span><span>${ago(c.created)}</span></div>
         ${c.hook ? `<p style="margin:10px 0 0"><span class="dim small">HOOK</span><br><b>${esc(c.hook)}</b></p>` : ""}
         ${c.reason ? `<p style="margin:10px 0 0"><span class="dim small">WHY THE AI PICKED IT</span><br>${esc(c.reason)}</p>` : ""}</div>
+      ${(c.edits || []).length ? `<div class="card" style="margin-bottom:12px"><h3>Edit</h3>${c.edits.map((e) => `<div class="chatline"><span class="dim">${num(e.t)}s</span> <b>${esc({ zoom: "Zoom", cam_focus: "Facecam takeover", text: "Callout", sfx: "Sound", shake: "Shake" }[e.type] || e.type)}</b> ${esc(e.text || e.name || (e.focus ? "on " + e.focus : ""))}${e.dur ? ` <span class="dim">(${num(e.dur)}s)</span>` : ""}</div>`).join("")}</div>` : ""}
       <div class="card"><h3>Chat at that moment</h3><div style="max-height:260px;overflow:auto">${chat}</div></div>
     </div></div>`;
   const caption = () => `${$("#ti").value}\n\n${$("#ht").value}`;
@@ -555,50 +556,96 @@ function modal(html) {
 }
 
 function streamerModal(s) {
-  const isNew = !s;
-  const m = modal(`<h2>${isNew ? "Add a streamer" : "Edit " + esc(s.name)}</h2>${streamerForm(s || {}, isNew)}
-    ${isNew ? "" : `<div id="camsec"><h3>Facecam & crop</h3><p class="small muted">Drag the box over the streamer's camera (drag the corner to resize). Uses the latest recorded frame.</p>
+  if (!s) return addStreamerModal();
+  const enc = encodeURIComponent(s.name);
+  const tabs = [["src", "Source"], ["cam", "Facecam & crop"], ["cap", "Captions"], ["edit", "Editing"], ["det", "Detection"]];
+  const colorField = (k, label, val) => `<div class="field"><label>${label}</label><input type="color" name="${k}" value="${esc(val)}" style="height:42px;padding:4px"></div>`;
+  const m = modal(`<h2>${esc(s.name)}</h2><p class="small muted" style="margin-top:-4px">Every setting here applies only to this streamer and takes effect right away.</p>
+    <div class="tabs" id="stabs">${tabs.map(([k, l], i) => `<button type="button" class="tab ${i ? "" : "on"}" data-t="${k}">${l}</button>`).join("")}</div>
+    <form id="sf" onsubmit="return false">
+    <div data-pane="src">${streamerForm(s, false)}
+      ${textField("display_name", "Name used in titles", s.display_name, "Leave empty to use the channel name.")}
+      ${selField("language", "Clip language", s.language || "", [["", "App default"], ["pt", "Português (BR)"], ["en", "English"]])}
+      ${textField("quality", "Stream quality", s.quality, "First available is used, e.g. 1080p60,1080p,best")}</div>
+    <div data-pane="cam" style="display:none"><p class="small muted">Drag the box over the streamer's camera (drag the corner to resize). Uses the latest recorded frame.</p>
       <div class="cam-pick" id="cp"><img id="fr" alt=""><div class="box" id="bx"><div class="h"></div></div></div>
-      <div class="two" style="margin-top:12px"><div class="field"><label>Gameplay horizontal position</label><div class="range-row"><input type="range" id="gcx" min="0" max="1" step="0.01" value="${s.game_center_x}"><output>${s.game_center_x}</output></div></div>
-      <div class="field"><label>Gameplay zoom (hide HUD edges)</label><div class="range-row"><input type="range" id="gz" min="1" max="1.6" step="0.02" value="${s.game_zoom}"><output>${s.game_zoom}</output></div></div></div>
-      <div class="row"><img id="lp" class="layout-prev" alt=""><div class="small muted" style="flex:1">Preview of the vertical layout (updates after saving).</div></div></div>`}
-    <div class="row" style="margin-top:16px"><span style="flex:1"></span><button class="btn" id="cancel">Cancel</button><button class="btn pri" id="save">${isNew ? "Add & start watching" : "Save"}</button></div>`);
+      <div class="two" style="margin-top:12px">
+        ${rangeField("cam_height", "Facecam height (share of the video)", s.cam_height, 0.25, 0.6, 0.01, "Bigger = more face, less gameplay.")}
+        ${rangeField("game_center_x", "Gameplay horizontal position", s.game_center_x, 0, 1, 0.01)}
+        ${rangeField("game_zoom", "Gameplay zoom (hide HUD edges)", s.game_zoom, 1, 1.6, 0.02)}
+      </div>
+      <div class="row"><img id="lp" class="layout-prev" alt=""><div class="small muted" style="flex:1">Preview of the vertical layout (updates after saving).</div></div></div>
+    <div data-pane="cap" style="display:none">
+      ${selField("captions", "Who gets captions", s.captions, [["streamer", "Only the streamer (recommended)"], ["all", "Everyone, including game dialogue"], ["off", "No captions"]], "The AI tells the streamer's voice apart from NPCs, radio and cutscenes.")}
+      ${rangeField("caption_y", "Caption height on screen (0.5 = middle)", s.caption_y, 0.45, 0.8, 0.01)}
+      <div class="two">${colorField("caption_color", "Caption color", s.caption_color)}${colorField("highlight_color", "Spoken-word highlight", s.highlight_color)}</div>
+      ${colorField("callout_color", "Callout box color", s.callout_color)}
+      ${switchField("hook", "Show the hook text in the first seconds", s.hook)}</div>
+    <div data-pane="edit" style="display:none">
+      ${selField("edit_intensity", "Editing intensity", s.edit_intensity, [["off", "Off — clean cut"], ["light", "Light — up to 3 effects"], ["normal", "Normal — up to 7 effects"], ["heavy", "Heavy — up to 12 effects"]], "The AI places effects exactly on the moments that matter.")}
+      ${switchField("edit_zoom", "Punch-in zooms (reaction / key action)", s.edit_zoom)}
+      ${switchField("edit_cam_focus", "Facecam takes over the screen on big reactions", s.edit_cam_focus)}
+      ${switchField("edit_text", "Callout texts (what happened / what went wrong)", s.edit_text)}
+      ${switchField("edit_sfx", "Sound effects", s.edit_sfx)}
+      ${switchField("edit_shake", "Screen shake on impacts", s.edit_shake)}
+      ${rangeField("sfx_volume", "Sound effect volume", s.sfx_volume, 0, 1.5, 0.05)}
+      ${areaField("hashtags", "Extra hashtags for this streamer", s.hashtags)}</div>
+    <div data-pane="det" style="display:none">
+      ${rangeField("sensitivity", "Sensitivity (higher = more clips)", s.sensitivity, 0.5, 2, 0.05, "Multiplies the global threshold for this streamer only. Big chats often need lower sensitivity.")}
+      <div class="two">${textField("cooldown_s", "Min. seconds between clips", s.cooldown_s ?? "", "Empty = global setting")}${textField("chat_offset_s", "Chat delay (s)", s.chat_offset_s ?? "", "Empty = global setting")}</div>
+      ${areaField("keywords_extra", "Extra hype words for this chat", s.keywords_extra, "Emotes or slang this community spams, comma separated.")}</div>
+    </form>
+    <div class="row" style="margin-top:16px"><span style="flex:1"></span><button class="btn" id="cancel">Close</button><button class="btn pri" id="save">Save</button></div>`);
+  bindStreamerForm();
+  $$('#plat button').forEach((b) => { if (b.dataset.v !== s.platform) b.style.display = "none"; });
+  $$("#stabs .tab").forEach((t) => (t.onclick = () => {
+    $$("#stabs .tab").forEach((x) => x.classList.toggle("on", x === t));
+    $$("[data-pane]", m.el).forEach((p) => (p.style.display = p.dataset.pane === t.dataset.t ? "" : "none"));
+  }));
+  $$("input[type=range]", m.el).forEach((r) => (r.oninput = () => (r.nextElementSibling.textContent = r.value)));
+  $("#cancel").onclick = m.close;
+  let cam = { ...s.cam };
+  const fr = $("#fr"), box = $("#bx"), wrap = $("#cp");
+  fr.onerror = () => { $('[data-pane="cam"] p').innerHTML = `<span style="color:var(--orange)">No frame yet — this streamer needs to be live for a few seconds.</span>`; };
+  fr.src = `/api/streamers/${enc}/frame.jpg?t=${Date.now()}`;
+  const lp = $("#lp"); lp.src = `/api/streamers/${enc}/layout.jpg?t=${Date.now()}`; lp.onerror = () => (lp.style.display = "none");
+  const place = () => { box.style.left = cam.x * 100 + "%"; box.style.top = cam.y * 100 + "%"; box.style.width = cam.w * 100 + "%"; box.style.height = cam.h * 100 + "%"; };
+  place();
+  let drag = null;
+  box.onpointerdown = (e) => { e.preventDefault(); box.setPointerCapture(e.pointerId); drag = { mode: e.target.classList.contains("h") ? "size" : "move", x: e.clientX, y: e.clientY, c: { ...cam } }; };
+  box.onpointermove = (e) => {
+    if (!drag) return;
+    const r = wrap.getBoundingClientRect(), dx = (e.clientX - drag.x) / r.width, dy = (e.clientY - drag.y) / r.height;
+    if (drag.mode === "move") { cam.x = Math.min(1 - cam.w, Math.max(0, drag.c.x + dx)); cam.y = Math.min(1 - cam.h, Math.max(0, drag.c.y + dy)); }
+    else { cam.w = Math.min(1 - cam.x, Math.max(0.05, drag.c.w + dx)); cam.h = Math.min(1 - cam.y, Math.max(0.05, drag.c.h + dy)); }
+    place();
+  };
+  box.onpointerup = () => (drag = null);
+  $("#save").onclick = async () => {
+    try {
+      const body = { ...formValues($("#sf")), layout: $("#layv").value, cam: roundCam(cam) };
+      if (s.platform === "kick") body.kick_chatroom_id = $("#kid").value.trim();
+      const r = await api(`/api/streamers/${enc}`, { method: "PATCH", body });
+      toast(r.changed.length ? `Saved: ${r.changed.length} change(s)` : "Nothing changed");
+      lp.style.display = ""; lp.src = `/api/streamers/${enc}/layout.jpg?t=${Date.now()}`;
+      refreshOverview(300);
+      if (route().view === "streamers") viewStreamers($("#view"));
+    } catch (e) { toast(esc(e.message)); }
+  };
+}
+
+function addStreamerModal() {
+  const m = modal(`<h2>Add a streamer</h2>${streamerForm({}, true)}
+    <p class="small muted">You can fine-tune captions, editing and sensitivity for this streamer afterwards (Edit).</p>
+    <div class="row" style="margin-top:16px"><span style="flex:1"></span><button class="btn" id="cancel">Cancel</button><button class="btn pri" id="save">Add & start watching</button></div>`);
   bindStreamerForm();
   $("#cancel").onclick = m.close;
-  let cam = s ? { ...s.cam } : null;
-  if (!isNew) {
-    $$('#plat button').forEach((b) => { if (b.dataset.v !== s.platform) b.style.display = "none"; });
-    $$("input[type=range]", m.el).forEach((r) => (r.oninput = () => (r.nextElementSibling.textContent = r.value)));
-    const fr = $("#fr"), box = $("#bx"), wrap = $("#cp");
-    fr.onerror = () => { $("#camsec").querySelector("p").innerHTML = `<span style="color:var(--orange)">No frame yet — this streamer needs to be live for a few seconds.</span>`; };
-    fr.src = `/api/streamers/${encodeURIComponent(s.name)}/frame.jpg?t=${Date.now()}`;
-    const lp = $("#lp"); lp.src = `/api/streamers/${encodeURIComponent(s.name)}/layout.jpg?t=${Date.now()}`; lp.onerror = () => (lp.style.display = "none");
-    const place = () => { box.style.left = cam.x * 100 + "%"; box.style.top = cam.y * 100 + "%"; box.style.width = cam.w * 100 + "%"; box.style.height = cam.h * 100 + "%"; };
-    place();
-    let drag = null;
-    box.onpointerdown = (e) => { e.preventDefault(); box.setPointerCapture(e.pointerId); drag = { mode: e.target.classList.contains("h") ? "size" : "move", x: e.clientX, y: e.clientY, c: { ...cam } }; };
-    box.onpointermove = (e) => {
-      if (!drag) return;
-      const r = wrap.getBoundingClientRect(), dx = (e.clientX - drag.x) / r.width, dy = (e.clientY - drag.y) / r.height;
-      if (drag.mode === "move") { cam.x = Math.min(1 - cam.w, Math.max(0, drag.c.x + dx)); cam.y = Math.min(1 - cam.h, Math.max(0, drag.c.y + dy)); }
-      else { cam.w = Math.min(1 - cam.x, Math.max(0.05, drag.c.w + dx)); cam.h = Math.min(1 - cam.y, Math.max(0.05, drag.c.h + dy)); }
-      place();
-    };
-    box.onpointerup = () => (drag = null);
-  }
   $("#save").onclick = async () => {
     try {
       const body = readStreamerForm();
-      if (isNew) {
-        if (body.platform !== "demo" && !body.channel) throw new Error("Type the channel name");
-        await api("/api/streamers", { method: "POST", body });
-        toast(`Watching <b>${esc(body.name || body.channel)}</b>`); m.close();
-      } else {
-        delete body.channel; delete body.name; delete body.platform;
-        Object.assign(body, { cam: roundCam(cam), game_center_x: +$("#gcx").value, game_zoom: +$("#gz").value });
-        await api(`/api/streamers/${encodeURIComponent(s.name)}`, { method: "PATCH", body });
-        toast("Saved"); const lp = $("#lp"); lp.style.display = ""; lp.src = `/api/streamers/${encodeURIComponent(s.name)}/layout.jpg?t=${Date.now()}`;
-      }
+      if (body.platform !== "demo" && !body.channel) throw new Error("Type the channel name");
+      await api("/api/streamers", { method: "POST", body });
+      toast(`Watching <b>${esc(body.name || body.channel)}</b>`); m.close();
       refreshOverview(300);
       if (route().view === "streamers") viewStreamers($("#view"));
     } catch (e) { toast(esc(e.message)); }
@@ -607,14 +654,14 @@ function streamerModal(s) {
 const roundCam = (c) => ({ x: +c.x.toFixed(4), y: +c.y.toFixed(4), w: +c.w.toFixed(4), h: +c.h.toFixed(4) });
 
 /* ------------------------------------------------------------------ settings */
-const SET_TABS = [["detection", "Detection"], ["ai", "Clips & AI"], ["notify", "Notifications"], ["phone", "Phone access"], ["updates", "Updates"], ["security", "Security"], ["system", "System"], ["logs", "Logs"]];
+const SET_TABS = [["detection", "Detection"], ["ai", "Clips & AI"], ["sounds", "Sounds"], ["notify", "Notifications"], ["phone", "Phone access"], ["updates", "Updates"], ["security", "Security"], ["system", "System"], ["logs", "Logs"]];
 async function viewSettings(v) {
   const sub = route().arg || S.settingsTab;
   S.settingsTab = sub;
   v.innerHTML = `<div class="head"><h1>Settings</h1></div><div class="tabs">${SET_TABS.map(([k, l]) => `<a class="tab ${k === sub ? "on" : ""}" href="#/settings/${k}">${l}</a>`).join("")}</div><div id="sv" class="dim">Loading…</div>`;
   const s = await api("/api/settings");
   const el = $("#sv"); el.className = "";
-  ({ detection: setDetection, ai: setAI, notify: setNotify, phone: setPhone, updates: setUpdates, security: setSecurity, system: setSystem, logs: setLogs }[sub] || setDetection)(el, s);
+  ({ detection: setDetection, ai: setAI, sounds: setSounds, notify: setNotify, phone: setPhone, updates: setUpdates, security: setSecurity, system: setSystem, logs: setLogs }[sub] || setDetection)(el, s);
 }
 const rangeField = (k, label, val, min, max, step, hint) => `<div class="field"><label>${label}</label><div class="range-row"><input type="range" name="${k}" min="${min}" max="${max}" step="${step}" value="${val}"><output>${val}</output></div>${hint ? `<span class="hint">${hint}</span>` : ""}</div>`;
 const textField = (k, label, val, hint, type = "text") => `<div class="field"><label>${label}</label><input type="${type}" name="${k}" value="${esc(val ?? "")}">${hint ? `<span class="hint">${hint}</span>` : ""}</div>`;
@@ -667,6 +714,11 @@ function setAI(el, s) {
     ${textField("font", "Caption font name", c.font, "Font file goes in the app's fonts folder.")}
     ${areaField("default_hashtags", "Default hashtags", c.default_hashtags)}
     </div></div><button class="btn pri" id="save">Save</button></form>
+    <form class="card" style="margin-top:14px" onsubmit="return false" id="edf"><h2>Editing</h2>
+    ${switchField("ai_sees_frames", "Let the AI look at frames from each clip", s.editing.ai_sees_frames, "Claude sees what happens on screen, so zooms, callouts and sound effects land on the right moments. Uses a bit more of your Claude usage.")}
+    <p class="small muted">Intensity, zooms, callouts, sound effects and caption style are set per streamer: Streamers → Edit → Editing / Captions.</p>
+    <button class="btn" id="save3">Save</button></form>
+    <div class="card" style="margin-top:14px"><h2>Sound effects</h2><p class="small muted">Manage and add sounds in <a href="#/settings/sounds">Settings → Sounds</a>.</p></div>
     <form class="card" style="margin-top:14px" onsubmit="return false" id="gen"><h2>Storage</h2>
     <p class="small muted">Recordings are kept in <span class="code">${esc(s.general.data_dir)}</span>. Settings file: <span class="code">${esc(s.general.config_path)}</span></p>
     ${rangeField("retention_hours", "Keep raw recordings for (hours)", s.general.retention_hours, 2, 96, 1, "About 3.5 GB per hour per 1080p stream. Clips are kept forever.")}
@@ -674,6 +726,54 @@ function setAI(el, s) {
   bindForm(el, "clipper");
   $$("#gen input[type=range]").forEach((r) => (r.oninput = () => (r.nextElementSibling.textContent = r.value)));
   $("#save2").onclick = async () => { await api("/api/settings/general", { method: "PATCH", body: formValues($("#gen")) }); toast("Saved"); };
+  $("#save3").onclick = async () => { await api("/api/settings/editing", { method: "PATCH", body: formValues($("#edf")) }); toast("Saved"); };
+
+}
+
+async function setSounds(el) {
+  el.innerHTML = `<div class="card"><h2>Add sounds</h2>
+    <p class="small muted">Upload sound files or a whole <b>.zip</b> pack (works from your phone too). Name a file after a sound in the list below — e.g. <span class="code">vine-boom.mp3</span> — and the AI knows exactly when to use it. Every sound is volume-matched automatically.</p>
+    <div class="row"><input type="file" id="sfxf" multiple accept="audio/*,.zip" style="display:none"><button class="btn pri" id="sfxpick">Upload sounds…</button><span id="sfxst" class="small muted"></span></div></div>
+    <div class="card" style="margin-top:14px"><h2>Most-used editing sounds</h2>
+    <p class="small muted">The sounds short-form editors use most. Download the ones you like from the links (Pixabay, Mixkit and Freesound's CC0 filter allow free use in monetized videos without credit — always check the license on the sound's page), then upload them here. Very famous meme clips may come from copyrighted recordings: when in doubt, use a royalty-free version.</p>
+    <div id="starter" class="dim small">Loading…</div></div>
+    <div class="card" style="margin-top:14px"><h2>Your library</h2><p class="small muted">Only enabled sounds are offered to the AI. Edit the description to tell it when to use a sound.</p><div id="lib" class="dim small">Loading…</div></div>`;
+  const pick = $("#sfxf");
+  $("#sfxpick").onclick = () => pick.click();
+  pick.onchange = async () => {
+    const files = [...pick.files]; let added = 0;
+    for (const [i, f] of files.entries()) {
+      $("#sfxst").textContent = `Uploading ${i + 1}/${files.length}: ${f.name}…`;
+      const r = await fetch(`/api/sfx/upload?filename=${encodeURIComponent(f.name)}`, { method: "POST", body: f, credentials: "same-origin", headers: { "Content-Type": "application/octet-stream" } });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) added += j.added.length; else toast(esc(j.error || "upload failed"));
+    }
+    $("#sfxst").textContent = `Added ${added} sound(s).`; pick.value = ""; load();
+  };
+  async function load() {
+    const r = await api("/api/sfx");
+    $("#starter").className = "";
+    $("#starter").innerHTML = `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px">${r.starter.map((x) => `
+      <div style="border:1px solid var(--line);border-radius:10px;padding:8px 10px">
+        <div class="row" style="gap:6px"><span class="st" style="color:${x.have ? "var(--green)" : "var(--dim)"}">${x.have ? "✓" : "○"}</span><b class="mono" style="font-size:13px">${esc(x.name)}</b></div>
+        <div class="small muted" style="margin:3px 0 5px">${esc(x.use)}</div>
+        <div class="small"><a href="${x.pixabay}" target="_blank" rel="noopener">Search Pixabay</a> · <a href="${x.freesound}" target="_blank" rel="noopener">Search Freesound CC0</a></div></div>`).join("")}</div>
+      <h3 style="margin-top:16px">Whole libraries and packs</h3>${r.sources.map((x) => `<div class="small" style="padding:3px 0"><a href="${esc(x.url)}" target="_blank" rel="noopener"><b>${esc(x.name)}</b></a> <span class="muted">— ${esc(x.note)}</span></div>`).join("")}`;
+    $("#lib").className = "";
+    const order = { yours: 0, "bundled (Kenney, CC0)": 1, synth: 2 };
+    $("#lib").innerHTML = r.sounds.sort((a, b) => (order[a.source] ?? 3) - (order[b.source] ?? 3) || a.name.localeCompare(b.name)).map((x) => `
+      <div class="row" style="padding:7px 0;border-bottom:1px solid var(--line);flex-wrap:nowrap">
+        <button class="btn sm" data-play="${esc(x.name)}" title="Play">▶</button>
+        <div style="flex:1;min-width:0"><div class="row" style="gap:6px"><b class="mono" style="font-size:13px">${esc(x.name)}</b><span class="pill ${x.source === "yours" ? "demo" : ""}">${esc(x.source === "synth" ? "basic" : x.source === "yours" ? "yours" : "bundled")}</span></div>
+          <input type="text" data-desc="${esc(x.name)}" value="${esc(x.desc)}" style="margin-top:4px;padding:6px 8px;font-size:13px"></div>
+        <label class="switch" title="Offer to the AI"><input type="checkbox" data-en="${esc(x.name)}" ${x.enabled ? "checked" : ""}><span></span></label>
+        ${x.source === "yours" ? `<button class="btn sm bad" data-del="${esc(x.name)}" title="Delete">✕</button>` : ""}</div>`).join("");
+    $$("[data-play]").forEach((b) => (b.onclick = () => new Audio(`/media/sfx/${encodeURIComponent(b.dataset.play)}`).play()));
+    $$("[data-desc]").forEach((i) => (i.onchange = async () => { await api(`/api/sfx/${encodeURIComponent(i.dataset.desc)}`, { method: "PATCH", body: { desc: i.value } }); toast("Description saved"); }));
+    $$("[data-en]").forEach((c) => (c.onchange = () => api(`/api/sfx/${encodeURIComponent(c.dataset.en)}`, { method: "PATCH", body: { enabled: c.checked } })));
+    $$("#lib [data-del]").forEach((b) => (b.onclick = async () => { if (!confirm(`Delete ${b.dataset.del}?`)) return; await api(`/api/sfx/${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" }); load(); }));
+  }
+  load();
 }
 
 function setNotify(el, s) {
@@ -733,12 +833,14 @@ function setSecurity(el) {
 async function setSystem(el) {
   el.innerHTML = `<div class="card"><h2>System check</h2><div id="chk" class="dim">Running…</div>
     <div class="row" style="margin-top:10px"><button class="btn" id="re">Re-check</button><button class="btn" id="ct">Test Claude</button><span id="ctr" class="small"></span></div></div>
-    <div class="card" style="margin-top:14px"><h2>App</h2><div class="row"><button class="btn" id="rs">Restart app</button><button class="btn" id="ob">Run onboarding again</button></div></div>`;
+    <div class="card" style="margin-top:14px"><h2>App</h2><div class="row"><button class="btn" id="rs">Restart app</button><button class="btn" id="ob">Run onboarding again</button><button class="btn bad" id="quit">Quit Live Clipper</button></div>
+    <p class="small muted">Quit stops recording and closes the app (also available from the tray icon). Open it again from the Start menu / app launcher.</p></div>`;
   const run = async () => { $("#chk").innerHTML = checkList((await api("/api/system/check")).items); };
   $("#re").onclick = run;
   $("#ct").onclick = async () => { $("#ctr").textContent = "Asking Claude…"; const r = await api("/api/system/claude-test", { method: "POST" }); $("#ctr").textContent = r.ok ? "✓ Claude works" : "✗ " + r.detail; };
   $("#rs").onclick = async () => { await api("/api/restart", { method: "POST" }); toast("Restarting… the page reconnects by itself", 8000); };
   $("#ob").onclick = () => { S.state.onboarded = false; S.ob.step = 1; render(); };
+  $("#quit").onclick = async () => { if (!confirm("Quit Live Clipper? Recording and clip editing stop until you open it again.")) return; await api("/api/quit", { method: "POST" }); stopEvents(); root().innerHTML = `<div class="boot">Live Clipper was closed. Open it again from the Start menu / app launcher.</div>`; };
   run();
 }
 

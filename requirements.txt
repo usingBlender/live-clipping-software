@@ -7,3 +7,5 @@ nvidia-cublas-cu12
 nvidia-cudnn-cu12==9.*
 streamlink>=7
 websockets>=12   # only for the experimental Kick chat reader
+pystray>=0.19       # tray icon (Open / Pause all / Quit)
+pillow>=10

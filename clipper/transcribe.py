@@ -69,9 +69,25 @@ def available() -> bool:
         return False
 
 
-def transcribe(cfg, path: str) -> dict:
+def _segment_language(model, audio, s, e, sr=16000):
+    """Spoken language of one transcript segment (used to tell the streamer from in-game dialogue,
+    e.g. a Brazilian streamer vs GTA's English voice acting). Returns (lang, prob) or (None, 0)."""
+    if e - s < 0.8:
+        return None, 0.0
+    chunk = audio[int(s * sr): int(e * sr)]
+    try:
+        lang, prob, *_ = model.detect_language(audio=chunk)
+        return lang, float(prob)
+    except Exception:  # noqa: BLE001  (older faster-whisper without detect_language)
+        return None, 0.0
+
+
+def transcribe(cfg, path: str, language: str | None = None) -> dict:
+    """Words and segments with timestamps in file seconds. Each segment gets an index and its
+    detected language so the editor can caption only the streamer."""
     if not available():
         return {"segments": [], "words": [], "warning": "faster-whisper not installed"}
+    language = language or cfg["clipper"].get("language", "pt")
     with _lock:
         model = _load(cfg)
         # Decode with FFmpeg ourselves and pass raw 16 kHz samples. faster-whisper's own decoder uses PyAV,
@@ -79,11 +95,31 @@ def transcribe(cfg, path: str) -> dict:
         from watcher.media import _decode_audio
         audio = _decode_audio(Path(path)).copy()  # writable array
         segments, _info = model.transcribe(
-            audio, language=cfg["clipper"].get("language", "pt"), word_timestamps=True,
+            audio, language=language, word_timestamps=True,
             vad_filter=True, beam_size=5, condition_on_previous_text=False)
         segs, words = [], []
-        for s in segments:
-            segs.append({"s": round(s.start, 2), "e": round(s.end, 2), "text": s.text.strip()})
+        for i, s in enumerate(segments):
+            lang, prob = _segment_language(model, audio, s.start, s.end)
+            segs.append({"i": i, "s": round(s.start, 2), "e": round(s.end, 2), "text": s.text.strip(),
+                         "lang": lang, "lang_p": round(prob, 2)})
             for w in s.words or []:
-                words.append({"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)})
-    return {"segments": segs, "words": words}
+                words.append({"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2), "seg": i})
+    return {"segments": segs, "words": words, "language": language}
+
+
+def caption_words(tr: dict, mode: str, streamer_segments, language: str) -> list:
+    """Pick which words get captions.
+    mode 'off' -> none; 'all' -> everything; 'streamer' -> only the streamer's own speech, using the AI's
+    list of streamer segments when available, otherwise dropping segments confidently detected as another
+    language (game dialogue)."""
+    if mode == "off":
+        return []
+    words = tr.get("words", [])
+    if mode == "all":
+        return words
+    if isinstance(streamer_segments, list):
+        keep = {int(i) for i in streamer_segments if str(i).lstrip("-").isdigit()}
+        return [w for w in words if w.get("seg") in keep]
+    other = {sg["i"] for sg in tr.get("segments", [])
+             if sg.get("lang") and sg["lang"] != language and sg.get("lang_p", 0) >= 0.6}
+    return [w for w in words if w.get("seg") not in other]

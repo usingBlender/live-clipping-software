@@ -12,14 +12,15 @@ from pathlib import Path
 from common.bus import bus, log
 from watcher import media
 from watcher.chat import demo_chat, kick_chat, message_weight, twitch_chat
-from watcher.detector import Detector
+from watcher.detector import Detector, StreamerDetectorSettings
 
 
 class StreamerWatcher:
     def __init__(self, store, name: str, on_candidate):
         self.store, self.name, self.on_candidate = store, name, on_candidate
         cfg = store.cfg
-        self.dc = cfg["detector"]                       # shared dict: live threshold/weight edits apply
+        # global detection settings + this streamer's overrides, read live
+        self.dc = StreamerDetectorSettings(cfg["detector"], lambda: store.streamer(name))
         self.seg_dir = cfg["data_dir"] / "segments" / name
         self.feat_dir = cfg["data_dir"] / "features" / name
         self.seg_dir.mkdir(parents=True, exist_ok=True)
@@ -66,6 +67,7 @@ class StreamerWatcher:
         return {"name": self.name, "state": self.state(), "live_since": self.live_since,
                 "chat_per_min": chat_min, "score": last.get("score"), "voice": last.get("voice"),
                 "candidates_today": self.candidates_today, "last_candidate": self.last_candidate,
+                "threshold": round(self.dc["threshold"], 2),
                 "warming_up": self.det.first_t is None or
                 (self.det.last_eval or 0) - (self.det.first_t or 0) < int(self.dc["warmup_s"]),
                 "error": self.error}
@@ -198,7 +200,8 @@ class StreamerWatcher:
                 self.history.append(pt)
             if pts:
                 bus.publish("metrics", {"streamer": self.name, "points": pts,
-                                        "threshold": self.dc["threshold"], "status": self.status()}, keep=False)
+                                        "threshold": round(self.dc["threshold"], 2), "status": self.status()},
+                            keep=False)
             self._write_features(ready)
             for ev in list(self.pending):
                 if self.audio_end >= ev["peak"] + int(self.dc["post_s"]) + 1:
@@ -229,7 +232,7 @@ class StreamerWatcher:
         t0, t1 = peak - int(self.dc["pre_s"]), peak + int(self.dc["post_s"])
         clip_id = f"{self.name}-{datetime.fromtimestamp(peak).strftime('%Y%m%d-%H%M%S')}"
         cand_dir = self.store.cfg["data_dir"] / "candidates"
-        out = cand_dir / f"{clip_id}.mkv"
+        out = cand_dir / f"{clip_id}.ts"
         try:
             file_start, dur = await asyncio.to_thread(media.cut_window, self.seg_dir, t0, t1, out)
         except Exception as e:  # noqa: BLE001
